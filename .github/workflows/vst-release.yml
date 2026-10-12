@@ -1,0 +1,32 @@
+# Build CC Map into a DRAFT release (ccmap-vst-v<version>): Actions -> "VST release (draft)" -> Run workflow.
+# dry_run (default on) builds the zip and skin previews as run artifacts only.
+name: VST release (draft)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version, e.g. 0.2.0
+        required: true
+        default: 0.2.0
+      dry_run:
+        description: Build only (zip + skin previews as run artifacts), no draft release
+        type: boolean
+        default: true
+
+jobs:
+  ccmap:
+    uses: sd88me/mpc-vst-plugins/.github/workflows/vst-release.yml@259f75d0ce0f836cfd89cc0a33c550b55917cffc
+    permissions:
+      contents: write
+    with:
+      tag: ccmap-vst-v${{ inputs.version }}
+      version: ${{ inputs.version }}
+      tools_ref: 259f75d0ce0f836cfd89cc0a33c550b55917cffc
+      vst_dir: vst
+      build: bash vst/build.sh
+      host_test: bash vst/test.sh
+      plugin_id: ccmap
+      license: MIT
+      about: MIDI controller mapper as an insert effect - Novation Launch Control (LEDs, pages), Evolution UC-33, Faderfox EC4 (value feedback) or any USB controller; learn, 128 slots, 4 pages, pickup, relative encoders, CC/note/program/page targets on 4 own MIDI ports, 32 presets.
+      dry_run: ${{ inputs.dry_run }}
