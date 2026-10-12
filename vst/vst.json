@@ -1,0 +1,11 @@
+{
+  "name": "CC Map",
+  "vendor": "lunarscraper",
+  "uid": "CcMp",
+  "version": 1000,
+  "so": "ccmap.so",
+  "effect": true,
+  "module": "module.json",
+  "layout": "layout.conf",
+  "_comment": "Insert effect (audio passed through untouched, takes no instrument slot): reads the Launch Control / UC-33 directly over ALSA, maps every knob, fader and pad (learn, 4 pages, 128 slots) and sends the result out of its own ALSA ports 'Out A'..'Out D'. vst.json/module.json only feed mpc-vst-plugins' tools/gen_vst.py for params.h + the skin. The plugin is ccmap_vst.cpp, built by this port's own build.sh."
+}
