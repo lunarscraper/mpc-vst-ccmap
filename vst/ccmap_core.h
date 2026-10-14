@@ -2,7 +2,7 @@
  * ccmap_core.h - the mapping engine of CC Map, free of VST and ALSA (so it can be tested offline).
  *
  * In:  channel messages from a hardware controller, tagged with the device they came from
- *      (Novation Launch Control, Evolution UC-33, Faderfox EC4, any other USB controller), plus
+ *      (Novation Launch Control, Evolution UC-33, Faderfox EC4, OXI E16, any other USB controller), plus
  *      the Launch Control's template-change SysEx.
  * Out: MIDI messages for one of the 4 output ports (Out A..D), FEEDBACK back to a controller that
  *      can show values (port FB_PORT + device, see feedback_all()), and the LED colours the
@@ -16,7 +16,7 @@
  * Every CC slot remembers where its control stands (Map::val, saved with the map), so that
  *  - FEEDBACK: on a page change, a preset or project load and when the controller turns up, the
  *    slots of the page send their positions back to a controller with value display / LED rings
- *    (Faderfox EC4): its encoders show the right value and the next turn doesn't jump;
+ *    (Faderfox EC4, OXI E16): its encoders show the right value and the next turn doesn't jump;
  *  - PICKUP: an absolute pot without feedback (Launch Control, UC-33) only takes over a slot once
  *    it has reached the slot's value (or crossed it), instead of jumping;
  *  - ENCODER REL 64 / REL 2C: a relative encoder adds its steps to that value.
@@ -32,7 +32,9 @@
 
 namespace ccmap {
 
-enum Dev { DEV_ANY = 0, DEV_LC = 1, DEV_UC = 2, DEV_USB = 3, DEV_EC4 = 4, NDEV = 5 };
+enum Dev { DEV_ANY = 0, DEV_LC = 1, DEV_UC = 2, DEV_USB = 3, DEV_EC4 = 4, DEV_E16 = 5, NDEV = 6 };
+/* controllers with value display / LED rings that take values back */
+static inline bool has_display(int dev) { return dev == DEV_EC4 || dev == DEV_E16; }
 enum SrcType { S_CC = 0, S_NOTE = 1 };
 enum DstType { D_OFF = 0, D_CC = 1, D_NOTE = 2, D_PROG = 3, D_PAGE = 4 };
 enum BtnMode { B_MOMENT = 0, B_TOGGLE = 1 };
@@ -47,8 +49,8 @@ enum { NMAP = 128, NPAGES = 4, NOUTS = 4, NLEDS = 12, QMAX = 256 };
  * 8-15 factory). LED index for the SysEx: pads 0-7, buttons 8-11. */
 enum { LC_UP = 114, LC_DOWN = 115, LC_LEFT = 116, LC_RIGHT = 117 };
 /* LED values: 16 * green + red + 12 (copy + clear) */
-enum { LED_OFF = 0x0C, LED_RED_LO = 0x0D, LED_RED = 0x0F, LED_GREEN_LO = 0x1C, LED_GREEN = 0x3C,
-       LED_AMBER = 0x3F, LED_AMBER_LO = 0x1D };
+static constexpr uint8_t LED_OFF = 0x0C, LED_RED_LO = 0x0D, LED_RED = 0x0F, LED_GREEN_LO = 0x1C, LED_GREEN = 0x3C,
+                         LED_AMBER = 0x3F, LED_AMBER_LO = 0x1D;
 
 struct Map {
     bool used = false;              /* has a source */
@@ -62,18 +64,18 @@ struct Run { int last = -1; bool high = false, on = false; int note = -1; bool c
 struct Settings {
     int page = 0;      /* active page 0..3 */
     int follow = 1;    /* touching a mapped control selects its slot in the editor */
-    int leds = 1;      /* drive the Launch Control's LEDs */
+    int leds = 2;      /* Launch Control LEDs: 0 off, 1 slots, 2 slots + template colour */
     int thru = 0;      /* unmapped controls: 0 drop, 1 pass to Out A unchanged */
     int link = 0;      /* Out A also feeds every other plugin's "Control In" port */
     int input = 0;     /* 0 Launch Control + UC-33 only, 1 every USB controller */
     int arrows = 0;    /* Launch Control arrows: 0 pages/slots, 1 free to map */
-    int feedback = 1;  /* send positions back: 0 off, 1 to the EC4, 2 to the EC4 and every other USB controller */
+    int feedback = 1;  /* send positions back: 0 off, 1 to the EC4 / E16, 2 also to every other USB controller */
     int takeover = 1;  /* absolute pots without feedback: 0 jump, 1 pickup */
 };
 struct Msg { uint8_t port, len, d[3]; };
 
 /* changed[] bits, read and cleared by the wrapper */
-enum { CH_SEL = 1, CH_LEARN = 2, CH_PAGE = 4, CH_LAST = 8, CH_SLOT = 16 };
+enum { CH_SEL = 1, CH_LEARN = 2, CH_PAGE = 4, CH_LAST = 8, CH_SLOT = 16, CH_TMPL = 32 };
 
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
@@ -87,7 +89,7 @@ static inline int lc_pad_index(int note) {
 static inline void src_name(char *b, size_t n, int dev, int ch, int stype, int num) {
     char pre[24];
     if (dev == DEV_LC) std::snprintf(pre, sizeof pre, "LC %c%d", ch < 8 ? 'U' : 'F', (ch & 7) + 1);
-    else std::snprintf(pre, sizeof pre, "%s CH%d", dev == DEV_UC ? "UC" : dev == DEV_USB ? "USB" : dev == DEV_EC4 ? "EC4" : "ANY", ch + 1);
+    else std::snprintf(pre, sizeof pre, "%s CH%d", dev == DEV_UC ? "UC" : dev == DEV_USB ? "USB" : dev == DEV_EC4 ? "EC4" : dev == DEV_E16 ? "E16" : "ANY", ch + 1);
     if (dev == DEV_LC && stype == S_CC) {
         if (num >= 21 && num <= 28) { std::snprintf(b, n, "%s KNOB %d", pre, num - 20); return; }
         if (num >= 41 && num <= 48) { std::snprintf(b, n, "%s KNOB %d", pre, num - 32); return; }
@@ -109,6 +111,8 @@ public:
     int sel = 0;             /* slot shown in the editor */
     bool learn = false;
     int lc_ch = 0;           /* the Launch Control's current template = its channel */
+    bool lc_seen = false;    /* a Launch Control has sent something */
+    bool flash_req = false;  /* template changed: the wrapper shows its number on the pads for a moment */
     char last[96] = "-";
     int changed = 0;
     Msg q[QMAX];
@@ -143,7 +147,7 @@ public:
     /* positions are taken up afresh (PICKUP), e.g. after the page changed under the pots */
     void uncatch() { for (int i = 0; i < NMAP; i++) { run[i].caught = false; run[i].prev = -1; } }
     bool fb_capable(int dev) const {
-        return (s.feedback >= 1 && dev == DEV_EC4) || (s.feedback == 2 && dev == DEV_USB);
+        return (s.feedback >= 1 && has_display(dev)) || (s.feedback == 2 && dev == DEV_USB);
     }
     /* FEEDBACK: every absolute CC slot of the page tells its controller where it stands (a control
      * used by several slots of the page: the first one). Call on page change, load, device found. */
@@ -227,7 +231,7 @@ public:
             if (s.thru) emit(0, st, d1, d2, (type == 0xC0 || type == 0xD0) ? 2 : 3);
             return;
         }
-        if (dev == DEV_LC) lc_ch = ch;
+        if (dev == DEV_LC) set_template(ch);
         char nm[48];
         src_name(nm, sizeof nm, dev, ch, stype, d1);
         if (stype == S_CC) std::snprintf(last, sizeof last, "%s = %d", nm, d2);
@@ -294,33 +298,66 @@ public:
         if (s.follow) select(first);
     }
 
+    void set_template(int t) {
+        t &= 0x0F;
+        if (!lc_seen || t != lc_ch) { flash_req = true; changed |= CH_TMPL; }
+        lc_ch = t;
+        lc_seen = true;
+    }
     /* Launch Control SysEx: F0 00 20 29 02 0A 77 tt F7 = the user switched to template tt */
     void lc_sysex(const uint8_t *d, int n) {
         static const uint8_t H[7] = {0xF0, 0x00, 0x20, 0x29, 0x02, 0x0A, 0x77};
-        if (n >= 9 && !std::memcmp(d, H, 7) && d[8] == 0xF7) { lc_ch = d[7] & 0x0F; changed |= CH_LAST; }
+        if (n >= 9 && !std::memcmp(d, H, 7) && d[8] == 0xF7) { set_template(d[7]); changed |= CH_LAST; }
+    }
+    /* "USER 3", "FACTORY 2" */
+    void template_name(char *b, size_t n) const {
+        if (!lc_seen) std::snprintf(b, n, "- (NO LC YET)");
+        else std::snprintf(b, n, "%s %d", lc_ch < 8 ? "USER" : "FACTORY", (lc_ch & 7) + 1);
     }
 
-    /* ---- Launch Control LEDs: pads show their slot, arrows the pages left/right ---- */
-    void leds(uint8_t v[NLEDS]) const {
+    /* ---- Launch Control LEDs ------------------------------------------------------
+     * Template colour (LEDS = ON + TEMPLATE): every template 1..8 has its own colour at half
+     * brightness at most; the pads at rest show it, so the template is seen at a glance. Full
+     * brightness is kept for states: toggle on = green, held = amber, LEARN = red. USER or FACTORY:
+     * the up/down arrows red or green. On a template change the pad with the template's number
+     * lights alone for a moment (red = USER, green = FACTORY; flash = true).
+     * Without the template colour (LEDS = ON): toggle off dim red, button at rest dim green. */
+    static uint8_t template_colour(int t) {
+        static const uint8_t RG[8][2] = {{2, 0}, {2, 1}, {2, 2}, {1, 2}, {0, 2}, {1, 0}, {1, 1}, {0, 1}};   /* red, green */
+        return (uint8_t)(16 * RG[t & 7][1] + RG[t & 7][0] + 12);
+    }
+    void leds(uint8_t v[NLEDS], bool flash = false) const {
         for (int i = 0; i < NLEDS; i++) v[i] = LED_OFF;
         if (!s.leds) return;
-        for (int p = 0; p < 8; p++) {
-            const int note = p < 4 ? 9 + p : 25 + p - 4;
-            for (int i = 0; i < NMAP; i++) {
-                const Map &m = map[i];
-                if (!on_page(m) || !matches(m, DEV_LC, lc_ch, S_NOTE, note)) continue;
-                const Run &r = run[i];
-                if (learn && i == sel) v[p] = LED_RED;
-                else if (m.type == D_PAGE) v[p] = (m.num == 0 || m.num - 1 == s.page) ? LED_AMBER : LED_AMBER_LO;
-                else if (m.btn == B_TOGGLE) v[p] = r.on ? LED_GREEN : LED_RED_LO;
-                else v[p] = r.high ? LED_AMBER : LED_GREEN_LO;
-                break;
+        const bool tc = s.leds == 2;
+        const uint8_t base = tc ? template_colour(lc_ch) : LED_OFF;
+        if (flash) {
+            v[lc_ch & 7] = lc_ch < 8 ? LED_RED : LED_GREEN;
+        } else {
+            bool any = false;
+            for (int p = 0; p < 8; p++) {
+                const int note = p < 4 ? 9 + p : 25 + p - 4;
+                for (int i = 0; i < NMAP; i++) {
+                    const Map &m = map[i];
+                    if (!on_page(m) || !matches(m, DEV_LC, lc_ch, S_NOTE, note)) continue;
+                    const Run &r = run[i];
+                    any = true;
+                    if (learn && i == sel) v[p] = LED_RED;
+                    else if (m.type == D_PAGE) v[p] = (m.num == 0 || m.num - 1 == s.page) ? LED_AMBER : (tc ? base : LED_AMBER_LO);
+                    else if (m.btn == B_TOGGLE) v[p] = r.on ? LED_GREEN : (tc ? base : LED_RED_LO);
+                    else v[p] = r.high ? LED_AMBER : (tc ? base : LED_GREEN_LO);
+                    break;
+                }
             }
+            /* no pad mapped on this template and page: all of them show its colour */
+            if (tc && !any) for (int p = 0; p < 8; p++) v[p] = base;
         }
         if (s.arrows == 0) {
-            v[8] = v[9] = LED_RED_LO;                                  /* up / down: editor slot */
-            v[10] = s.page > 0 ? LED_AMBER : LED_OFF;                  /* left */
-            v[11] = s.page < NPAGES - 1 ? LED_AMBER : LED_OFF;         /* right */
+            v[8] = v[9] = (tc && lc_ch >= 8) ? LED_GREEN_LO : LED_RED_LO;   /* up / down: editor slot; colour = USER/FACTORY */
+            v[10] = s.page > 0 ? LED_AMBER : LED_OFF;                        /* left */
+            v[11] = s.page < NPAGES - 1 ? LED_AMBER : LED_OFF;               /* right */
+        } else if (tc) {
+            v[8] = v[9] = lc_ch >= 8 ? LED_GREEN_LO : LED_RED_LO;
         }
     }
 
@@ -360,7 +397,7 @@ public:
             const int x = std::atoi(v);
             if (k == "pg") s.page = clampi(x, 0, NPAGES - 1);
             else if (k == "fo") s.follow = x != 0;
-            else if (k == "le") s.leds = x != 0;
+            else if (k == "le") s.leds = clampi(x, 0, 2);
             else if (k == "th") s.thru = x != 0;
             else if (k == "li") s.link = x != 0;
             else if (k == "in") s.input = x != 0;

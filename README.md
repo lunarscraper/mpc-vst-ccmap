@@ -6,8 +6,11 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.2.0, offline getestet (x86, ASan/UBSan), Test auf der Force steht aus.
-0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC. Projekte und Presets aus 0.1.0 laden weiter.
+**Status:** Version 0.4.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
+0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
+0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
+Projekte und Presets älterer Versionen laden weiter.
 
 ## Warum ein Insert-Effekt
 
@@ -78,11 +81,12 @@ PROGRAM sendet den Wert selbst als Programmnummer, also z. B. MIN 0 / MAX 7 für
 |---|---|
 | ACTIVE PAGE | Aktive Seite 1–4 |
 | FOLLOW | ON: Wer einen gemappten Regler bewegt, bekommt dessen Slot im Editor angezeigt |
-| LEDS | LEDs der Launch Control steuern |
+| LEDS | OFF, ON (nur Slot-Zustände) oder ON + TEMPLATE (zusätzlich Template-Farbe, Voreinstellung) |
 | UNMAPPED | DROP oder THRU A (nicht gemappte Bewegungen unverändert an Out A) |
 | LINK A | CONTROL IN: Out A speist alle „Control In"-Ports anderer Plugins |
-| INPUT | LC UC-33 EC4 oder ALL USB (jeder USB-Controller außer der Force selbst) |
+| INPUT | MY CONTROLLERS (Launch Control, UC-33, EC4, E16) oder ALL USB (jeder USB-Controller außer der Force selbst) |
 | ARROWS | PAGE/SLOT oder MAPPABLE (Pfeiltasten frei belegbar) |
+| LC TEMPLATE | Aktives Template der Launch Control, z. B. `USER 3` |
 
 ### Tab SYNC – Rückkanal und Pickup
 
@@ -90,7 +94,7 @@ Jeder CC-Slot merkt sich, wo sein Regler steht. Die Position wird mit Projekt un
 
 | Element | Funktion |
 |---|---|
-| FEEDBACK | OFF, EC4 oder EC4 + USB (auch andere USB-Controller bekommen ihre Werte zurück) |
+| FEEDBACK | OFF, EC4 + E16 oder + ALL USB (auch andere USB-Controller bekommen ihre Werte zurück) |
 | TAKEOVER | JUMP oder PICKUP für Potis ohne Rückkanal (Launch Control, UC-33) |
 | SEND VALUES | Schickt die Positionen der aktiven Seite sofort an den EC4 |
 | LAST | Letzte Bewegung, bei Pickup das Ziel: `LC U1 KNOB 1: TO 100` |
@@ -105,6 +109,16 @@ Jeder CC-Slot merkt sich, wo sein Regler steht. Die Position wird mit Projekt un
 
 32 Speicherplätze nach Rattler-Muster: PRESET-Regler blättert, LOAD lädt, SAVE speichert. Die Plätze
 erscheinen auch in der Preset-Liste der Force. Datei: `ccmap_presets.txt` neben dem Plugin-Ordner.
+
+Ein Preset ist die **ganze Belegung**: alle 128 Slots, die Einstellungen und die gemerkten
+Reglerpositionen. Mit dem Projekt wird die aktuelle Belegung ohnehin gespeichert, Presets braucht
+man also nur, um eine Belegung in andere Projekte mitzunehmen. Ein leerer Platz lässt beim Laden
+alles, wie es ist.
+
+**Empfehlung – ein Plugin pro Template:** Weil jeder Slot an das Template gebunden ist, auf dem er
+gelernt wurde, passen mehrere Plugins in **ein** Preset: z. B. USER 1 = Euclidier FX, USER 2 = Acid,
+USER 3 = Rattler. Das Template am Gerät umschalten wechselt das Plugin, ohne Preset-Wechsel. Einzelne
+Presets pro Plugin gehen genauso, dann aber immer nur eins zur Zeit.
 
 | Platz | Werk-Preset |
 |---|---|
@@ -123,6 +137,16 @@ erscheinen auch in der Preset-Liste der Force. Datei: `ccmap_presets.txt` neben 
 - LEDs per SysEx: Pad mit TOGGLE = grün (an) / schwach rot (aus), Pad mit MOMENT = schwach grün,
   gedrückt amber, PAGE-Pad = amber, Pad im LEARN = rot, Pfeile zeigen, ob es links/rechts weitere Seiten gibt.
 - Ein Template-Wechsel am Gerät wird erkannt (SysEx), die LEDs folgen.
+- **Template erkennen (LEDS = ON + TEMPLATE):** Jedes Template 1–8 hat eine eigene Farbe, die die
+  Pads in Ruhe zeigen (gemappte Pads; ist auf dem Template kein Pad gemappt, alle 8):
+
+  | Template | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+  |---|---|---|---|---|---|---|---|---|
+  | Farbe | Rot | Orange | Amber | Gelbgrün | Grün | schwach Rot | schwach Amber | schwach Grün |
+
+  Hoch/Runter leuchten rot bei USER, grün bei FACTORY. Beim Umschalten leuchtet gut eine Sekunde
+  lang nur das Pad mit der Template-Nummer (rot = USER, grün = FACTORY). Zustände bleiben in voller
+  Helligkeit: Toggle an = grün, gedrückt = amber, LEARN = rot.
 
 ## Evolution UC-33
 
@@ -143,6 +167,18 @@ erscheinen auch in der Preset-Liste der Force. Datei: `ccmap_presets.txt` neben 
 - Gruppen und Setups des EC4 senden andere CCs/Kanäle, sie brauchen also keine Seiten in CC Map:
   einfach jede Gruppe lernen, Seite ALL lassen.
 - Die Push-Taster der Encoder (z. B. Typ Note) lassen sich wie Pads lernen, etwa als TOGGLE oder als PAGE.
+
+## OXI E16
+
+- Wird am Namen („E16") erkannt; OXI One und OXI Coral zählen weiter als normale USB-Geräte.
+- Rückkanal wie beim EC4: Ringe und Display bekommen bei Seiten-/Presetwechsel, beim Laden und beim
+  Einstecken die Werte der Slots. Kein Pickup nötig, nichts springt.
+- Werte gehen nur an den **ersten** USB-Port des E16. Seine weiteren virtuellen Ports können zu den
+  TRS-Ausgängen führen; dort sollen keine Rückmeldungen landen.
+- Encoder im E16 auf **CC, 7 Bit, absolut** stellen. NRPN und 14 Bit wertet CC Map nicht aus.
+  Relativ geht auch: dann im Slot ENCODER passend wählen.
+- Die 12 Seiten einer E16-Szene senden eigene CCs/Kanäle: in CC Map einfach mit Seite ALL lernen.
+- Die Ringfarben stellst du in der OXI App ein; CC Map setzt sie nicht.
 
 ## Dateien
 

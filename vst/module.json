@@ -15,18 +15,19 @@
     {"key": "clear", "name": "Clear", "access": "write"},
     {"key": "cur_page", "name": "Active Page", "options": ["1", "2", "3", "4"]},
     {"key": "follow", "name": "Follow", "options": ["OFF", "ON"]},
-    {"key": "leds", "name": "LEDs", "options": ["OFF", "ON"]},
+    {"key": "leds", "name": "LEDs", "options": ["OFF", "ON", "ON + TEMPLATE"]},
     {"key": "thru", "name": "Unmapped", "options": ["DROP", "THRU A"]},
     {"key": "link", "name": "Link A", "options": ["OFF", "CONTROL IN"]},
-    {"key": "input", "name": "Input", "options": ["LC UC-33 EC4", "ALL USB"]},
+    {"key": "input", "name": "Input", "options": ["MY CONTROLLERS", "ALL USB"]},
     {"key": "arrows", "name": "Arrows", "options": ["PAGE/SLOT", "MAPPABLE"]},
     {"key": "monitor", "name": "Last", "min": 0, "max": 1},
     {"key": "preset", "name": "Preset", "min": 1, "max": 32},
     {"key": "load", "name": "Load", "access": "write"},
     {"key": "save", "name": "Save", "access": "write"},
     {"key": "enc", "name": "Encoder", "options": ["ABSOLUTE", "REL 64", "REL 2C"]},
-    {"key": "feedback", "name": "Feedback", "options": ["OFF", "EC4", "EC4 + USB"]},
+    {"key": "feedback", "name": "Feedback", "options": ["OFF", "EC4 + E16", "+ ALL USB"]},
     {"key": "takeover", "name": "Takeover", "options": ["JUMP", "PICKUP"]},
-    {"key": "send", "name": "Send Values", "access": "write"}
+    {"key": "send", "name": "Send Values", "access": "write"},
+    {"key": "template", "name": "LC Template", "min": 0, "max": 1}
   ]
 }

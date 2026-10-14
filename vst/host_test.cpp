@@ -35,7 +35,7 @@ struct AEffect {
     void (*processDoubleReplacing)(AEffect *, double **, double **, int32_t);
     char future[56];
 };
-enum { DEV_LC = 1, DEV_UC = 2, DEV_USB = 3, DEV_EC4 = 4, FB = 16 };
+enum { DEV_LC = 1, DEV_UC = 2, DEV_USB = 3, DEV_EC4 = 4, DEV_E16 = 5, FB = 16 };
 
 static int fails = 0, automates = 0, last_auto_idx = -1;
 static float last_auto_val = -1;
@@ -55,10 +55,12 @@ typedef void (*in_fn)(AEffect *, int, int, int, int);
 typedef void (*sx_fn)(AEffect *, const uint8_t *, int);
 typedef int (*take_fn)(AEffect *, uint8_t *, int);
 typedef void (*leds_fn)(AEffect *, uint8_t *);
+typedef int (*flash_fn)(AEffect *, uint8_t *);
 static in_fn t_in;
 static sx_fn t_sx;
 static take_fn t_take;
 static leds_fn t_leds;
+static flash_fn t_flash;
 
 struct Out { int port, st, d1, d2; };
 static std::vector<Out> take(AEffect *e) {
@@ -90,7 +92,7 @@ static void set(AEffect *e, const char *name, double v) {
     const std::string s = name;
     if (s == "Slot") { lo = 1; hi = 128; }
     else if (s == "Page") hi = 4;
-    else if (s == "Encoder" || s == "Feedback") hi = 2;
+    else if (s == "Encoder" || s == "Feedback" || s == "LEDs") hi = 2;
     else if (s == "Out" || s == "Active Page") hi = 3;
     else if (s == "Channel") { lo = 1; hi = 16; }
     else if (s == "Type") hi = 4;
@@ -128,7 +130,8 @@ int main(int argc, char **argv) {
     t_sx = (sx_fn)dlsym(lib, "ccmap_test_sysex");
     t_take = (take_fn)dlsym(lib, "ccmap_test_take");
     t_leds = (leds_fn)dlsym(lib, "ccmap_test_leds");
-    if (!t_in || !t_sx || !t_take || !t_leds) { std::printf("FAIL: test hooks missing (build with -DNO_ALSA)\n"); return 1; }
+    t_flash = (flash_fn)dlsym(lib, "ccmap_test_flash");
+    if (!t_in || !t_sx || !t_take || !t_leds || !t_flash) { std::printf("FAIL: test hooks missing (build with -DNO_ALSA)\n"); return 1; }
 
     AEffect *e = open_plugin(lib);
     CHECK(e->magic == 0x56737450, "magic");
@@ -146,8 +149,11 @@ int main(int argc, char **argv) {
         e->processReplacing(e, in, in, 64);   /* in == out */
     }
 
-    CHECK(display(e, "Takeover") == "PICKUP" && display(e, "Feedback") == "EC4", "0.2.0 defaults: pickup, feedback to EC4");
+    CHECK(display(e, "Takeover") == "PICKUP" && display(e, "Feedback") == "EC4 + E16", "0.2.0 defaults: pickup, feedback to EC4");
     set(e, "Takeover", 0);   /* the 0.1.0 tests below expect jumps; PICKUP is tested further down */
+    CHECK(display(e, "LEDs") == "ON + TEMPLATE", "0.3.0 default: template colour");
+    CHECK(display(e, "LC Template") == "- (NO LC YET)", "no LC yet: '%s'", display(e, "LC Template").c_str());
+    set(e, "LEDs", 1);       /* the 0.1.0 LED tests below expect plain slot colours */
 
     /* ---- learn a knob on slot 1 ---- */
     CHECK(display(e, "Slot") == "1 (empty)", "empty slot shows (empty): '%s'", display(e, "Slot").c_str());
@@ -510,6 +516,75 @@ int main(int argc, char **argv) {
     CHECK(is(o, 0, 0xB0, 21, 77), "0.1.0 slot plays (position unknown: no pickup): %s", dump(o).c_str());
     e->dispatcher(e, 1, 0, 0, nullptr, 0);
 
+    /* ---- 0.3.0: template colour, number flash, template readout ---- */
+    e = open_plugin(lib);
+    uint8_t v[12], fl[12];
+    t_in(e, DEV_LC, 0xB2, 21, 5);   /* knob from USER 3 */
+    CHECK(display(e, "LC Template") == "USER 3", "template readout: '%s'", display(e, "LC Template").c_str());
+    CHECK(t_flash(e, fl) == 1, "first sight of the LC: flash");
+    CHECK(fl[2] == 0x0F && fl[0] == 0x0C && fl[7] == 0x0C, "flash: pad 3 red alone (%02X %02X)", fl[2], fl[0]);
+    t_leds(e, v);
+    bool same = true;
+    for (int p = 0; p < 8; p++) same &= v[p] == v[0];
+    CHECK(same && v[0] == 16 * 2 + 2 + 12, "USER 3, nothing mapped: all pads amber (%02X)", v[0]);
+    CHECK(v[8] == 0x0D, "USER: up/down red");
+    const uint8_t f2[9] = {0xF0, 0x00, 0x20, 0x29, 0x02, 0x0A, 0x77, 0x09, 0xF7};
+    t_sx(e, f2, 9);
+    CHECK(display(e, "LC Template") == "FACTORY 2", "factory readout: '%s'", display(e, "LC Template").c_str());
+    CHECK(t_flash(e, fl) == 1 && fl[1] == 0x3C, "flash: pad 2 green for FACTORY 2 (%02X)", fl[1]);
+    t_leds(e, v);
+    CHECK(v[0] == 16 * 1 + 2 + 12 && v[8] == 0x1C, "FACTORY 2: orange pads, green up/down (%02X %02X)", v[0], v[8]);
+    t_sx(e, f2, 9);
+    CHECK(t_flash(e, fl) == 0, "same template: no flash");
+    uint8_t col[8];
+    for (int t = 0; t < 8; t++) {
+        const uint8_t sx[9] = {0xF0, 0x00, 0x20, 0x29, 0x02, 0x0A, 0x77, (uint8_t)t, 0xF7};
+        t_sx(e, sx, 9);
+        t_leds(e, v);
+        col[t] = v[0];
+        CHECK((v[0] & 0x03) < 3 && ((v[0] >> 4) & 0x03) < 3, "template colours stay below full brightness");
+    }
+    bool distinct = true;
+    for (int a2 = 0; a2 < 8; a2++) for (int b2 = a2 + 1; b2 < 8; b2++) distinct &= col[a2] != col[b2];
+    CHECK(distinct, "8 different template colours");
+    /* USER 1 with a toggle pad and a momentary pad: rest = template colour, states = full colours */
+    const uint8_t u1[9] = {0xF0, 0x00, 0x20, 0x29, 0x02, 0x0A, 0x77, 0x00, 0xF7};
+    t_sx(e, u1, 9);
+    set(e, "Slot", 1); press(e, "Learn"); t_in(e, DEV_LC, 0x90, 9, 127); t_in(e, DEV_LC, 0x80, 9, 0); set(e, "Button", 1);
+    set(e, "Slot", 2); press(e, "Learn"); t_in(e, DEV_LC, 0x90, 10, 127); t_in(e, DEV_LC, 0x80, 10, 0);
+    take(e);
+    t_leds(e, v);
+    CHECK(v[0] == 0x0E && v[1] == 0x0E && v[2] == 0x0C, "rest: red template colour on mapped pads, others off (%02X %02X %02X)", v[0], v[1], v[2]);
+    t_in(e, DEV_LC, 0x90, 9, 127); t_in(e, DEV_LC, 0x90, 10, 127);
+    t_leds(e, v);
+    CHECK(v[0] == 0x3C && v[1] == 0x3F, "toggle on green, held amber (%02X %02X)", v[0], v[1]);
+    take(e);
+    set(e, "LEDs", 0);
+    t_leds(e, v);
+    CHECK(v[0] == 0x0C && v[8] == 0x0C, "LEDS OFF: dark");
+    /* a 0.2.0 project (le=1) keeps the plain slot colours */
+    const std::string o2 = "CCMP1;pg=0;fo=1;le=1;th=0;li=0;in=0;ar=0;fb=1;to=1;prog=0;sel=0;";
+    e->dispatcher(e, 24, 0, (intptr_t)o2.size(), (void *)o2.data(), 0);
+    CHECK(display(e, "LEDs") == "ON", "0.2.0 project: LEDS ON");
+    e->dispatcher(e, 1, 0, 0, nullptr, 0);
+
+    /* ---- 0.4.0: OXI E16 ---- */
+    e = open_plugin(lib);
+    set(e, "Slot", 1); press(e, "Learn"); t_in(e, DEV_E16, 0xB0, 20, 50); set(e, "Page", 1);
+    CHECK(display(e, "Source") == "E16 CH1 CC 20", "E16 source: '%s'", display(e, "Source").c_str());
+    set(e, "Slot", 2); press(e, "Learn"); t_in(e, DEV_E16, 0xB0, 20, 50); set(e, "Page", 2);
+    take(e);
+    t_in(e, DEV_E16, 0xB0, 20, 90);
+    o = take(e);
+    CHECK(is(o, 0, 0xB0, 20, 90), "E16 page 1: %s", dump(o).c_str());
+    set(e, "Active Page", 1);
+    o = take(e);
+    CHECK(is(o, FB + DEV_E16, 0xB0, 20, 50), "page 2: E16 gets slot 2's position: %s", dump(o).c_str());
+    t_in(e, DEV_E16, 0xB0, 20, 10);   /* a display controller never waits for pickup */
+    o = take(e);
+    CHECK(is(o, 0, 0xB0, 20, 10), "E16 no pickup: %s", dump(o).c_str());
+    e->dispatcher(e, 1, 0, 0, nullptr, 0);
+
     /* ---- stress: random parameters and MIDI ---- */
     e = open_plugin(lib);
     srand(7);
@@ -518,7 +593,7 @@ int main(int argc, char **argv) {
         if (r < 3) e->setParameter(e, rand() % e->numParams, (rand() % 1001) / 1000.0f);
         else if (r < 9) {
             static const int ST[5] = {0x90, 0x80, 0xB0, 0xE0, 0xC0};
-            t_in(e, 1 + rand() % 4, ST[rand() % 5] | (rand() % 16), rand() % 128, rand() % 128);
+            t_in(e, 1 + rand() % 5, ST[rand() % 5] | (rand() % 16), rand() % 128, rand() % 128);
         } else block(e);
         if (it % 50 == 0) { take(e); char b[64]; for (int i = 0; i < e->numParams; i++) e->dispatcher(e, 7, i, 0, b, 0); }
         if (it % 997 == 0) e->dispatcher(e, 2, 0, rand() % 32, nullptr, 0);

@@ -18,7 +18,7 @@
  *        +--> "Link A": Out A also feeds every other plugin's "Control In" port (Euclidier FX,
  *        |    Acid FX, Maze FX ...), no routing needed
  *        +--> Launch Control LEDs over SysEx (pads show their slot, arrows show the pages)
- *        +--> FEEDBACK: the slots' positions back to a Faderfox EC4 (value display, no jumps) on a
+ *        +--> FEEDBACK: the slots' positions back to a Faderfox EC4 / OXI E16 (value display, no jumps) on a
  *             page change, a load and when it is plugged in; PICKUP for pots without feedback
  *
  * All ALSA traffic runs on one thread of its own (poll(), no dependence on the audio callback, so
@@ -87,7 +87,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.2.0"
+#define BUILD_ID "ccmap-0.4.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -99,12 +99,14 @@ enum {
     SLOT, LEARN, SOURCE, PAGE, OUT, CH, TYPE, NUM, LO, HI, BTN, CLEAR,
     CUR_PAGE, FOLLOW, LEDS, THRU, LINK, INPUT, ARROWS, MONITOR, PRESET, LOAD, SAVE,
     /* 0.2.0, appended */
-    ENC, FEEDBACK, TAKEOVER, SEND, NKEYS
+    ENC, FEEDBACK, TAKEOVER, SEND,
+    /* 0.3.0 */
+    TEMPLATE, NKEYS
 };
 static const char *const KEYS[NKEYS] = {
     "slot", "learn", "source", "page", "out", "ch", "type", "num", "lo", "hi", "btn", "clear",
     "cur_page", "follow", "leds", "thru", "link", "input", "arrows", "monitor", "preset", "load", "save",
-    "enc", "feedback", "takeover", "send",
+    "enc", "feedback", "takeover", "send", "template",
 };
 static int IDX[NKEYS];
 static int KEY_OF[NPARAMS];   /* PARAMS[] position -> key enum, -1 = not ours (popup flags) */
@@ -138,6 +140,7 @@ struct Plugin {
     std::map<int, int> fb_port;          /* client -> its writable port, for FEEDBACK (thread only) */
     uint8_t led_sent[NLEDS];
     int led_tmpl = -1;
+    double flash_until = 0;              /* template number on the pads until then (thread only) */
     std::vector<std::pair<int, int>> linked;
     int link_applied = 0;
 #else
@@ -385,11 +388,12 @@ static int classify(Plugin *w, int client) {
         else if (n.find("launch control") != std::string::npos || n.find("launchcontrol") != std::string::npos) dev = DEV_LC;
         else if (n.find("uc-33") != std::string::npos || n.find("uc33") != std::string::npos) dev = DEV_UC;
         else if (n.find("ec4") != std::string::npos) dev = DEV_EC4;
+        else if (n.find("e16") != std::string::npos) dev = DEV_E16;   /* "OXI E16" (OXI One / Coral stay USB) */
         else if (n.find("force") != std::string::npos || n.find("mpc") != std::string::npos ||
                  n.find("through") != std::string::npos) dev = -1;           /* the device itself */
         else dev = DEV_USB;
         LOG("[ccmap_vst] client %d '%s' -> %s\n", client, snd_seq_client_info_get_name(ci),
-            dev == DEV_LC ? "Launch Control" : dev == DEV_UC ? "UC-33" : dev == DEV_EC4 ? "Faderfox EC4" :
+            dev == DEV_LC ? "Launch Control" : dev == DEV_UC ? "UC-33" : dev == DEV_EC4 ? "Faderfox EC4" : dev == DEV_E16 ? "OXI E16" :
             dev == DEV_USB ? "USB controller" : "ignored");
     }
     w->dev_of[client] = dev;
@@ -407,7 +411,8 @@ static void subscribe(Plugin *w, int client, int port) {
     const int dev = classify(w, client);
     if (dev < 0) return;
     /* a controller that can take values back (FEEDBACK): remember where, and show it the map */
-    if ((dev == DEV_EC4 || dev == DEV_USB) && (cap & SND_SEQ_PORT_CAP_WRITE) && !w->fb_port.count(client)) {
+    /* the first writable port only: the E16's further USB ports may lead to its TRS outputs */
+    if ((has_display(dev) || dev == DEV_USB) && (cap & SND_SEQ_PORT_CAP_WRITE) && !w->fb_port.count(client)) {
         w->fb_port[client] = port;
         LOG("[ccmap_vst] feedback -> %d:%d '%s'\n", client, port, snd_seq_port_info_get_name(pi));
         std::lock_guard<std::mutex> lk(w->mu);
@@ -552,7 +557,7 @@ static void handle(Plugin *w, snd_seq_event_t *ev) {
     default: return;
     }
     std::lock_guard<std::mutex> lk(w->mu);
-    if (w->mp.s.input == 0 && dev != DEV_LC && dev != DEV_UC && dev != DEV_EC4) { w->n_ignored++; return; }
+    if (w->mp.s.input == 0 && dev != DEV_LC && dev != DEV_UC && !has_display(dev)) { w->n_ignored++; return; }
     w->n_in++;
     w->mp.input(dev, st, d1, d2);
     collect(w);
@@ -575,11 +580,15 @@ static void thread_main(Plugin *w) {
         /* everything the mapper queued (from MIDI or from the host's parameter calls) */
         uint8_t v[NLEDS];
         int tmpl, link;
+        timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        const double t_now = now.tv_sec + now.tv_nsec * 1e-9;
         {
             std::lock_guard<std::mutex> lk(w->mu);
             out.assign(w->mp.q, w->mp.q + w->mp.nq);
             w->mp.nq = 0;
-            w->mp.leds(v);
+            if (w->mp.flash_req) { w->mp.flash_req = false; w->flash_until = t_now + 1.2; }
+            w->mp.leds(v, t_now < w->flash_until);
             tmpl = w->mp.lc_ch;
             link = w->mp.s.link;
         }
@@ -683,6 +692,15 @@ extern "C" __attribute__((visibility("default"))) void ccmap_test_leds(AEffect *
     std::lock_guard<std::mutex> lk(w->mu);
     w->mp.leds(v);
 }
+/* the template-change flash: returns whether one was requested (and clears it), v = the flash picture */
+extern "C" __attribute__((visibility("default"))) int ccmap_test_flash(AEffect *e, uint8_t *v) {
+    Plugin *w = (Plugin *)e->object;
+    std::lock_guard<std::mutex> lk(w->mu);
+    const int r = w->mp.flash_req;
+    w->mp.flash_req = false;
+    w->mp.leds(v, true);
+    return r;
+}
 #endif
 
 /* ---- audio: pass through, report our own parameter changes to the host ---------- */
@@ -724,7 +742,7 @@ static void setParameter(AEffect *e, int32_t i, float n) {
     const param_t *p = &PARAMS[i];
     if (popup_set(w->open, i, n)) return;
     const int key = KEY_OF[i];
-    if (key < 0 || key == SOURCE || key == MONITOR) return;   /* readouts */
+    if (key < 0 || key == SOURCE || key == MONITOR || key == TEMPLATE) return;   /* readouts */
     if (key == PRESET) {   /* browsing only: LOAD loads, so turning the knob can't wipe the map */
         const int v = (int)std::lround(clamp01(n) * (NSLOTS - 1));
         if (v != w->cur.load()) { w->cur.store(v); w->redisplay.store(true); }
@@ -806,7 +824,7 @@ static float getParameter(AEffect *e, int32_t i) {
     if (i < 0 || i >= NPARAMS) return 0.0f;
     if (popup_is(i)) return w->open[i];
     const int key = KEY_OF[i];
-    if (key < 0 || is_trigger(key) || key == SOURCE || key == MONITOR) return 0.0f;
+    if (key < 0 || is_trigger(key) || key == SOURCE || key == MONITOR || key == TEMPLATE) return 0.0f;
     if (key == PRESET) return (float)w->cur.load() / (NSLOTS - 1);
     std::lock_guard<std::mutex> lk(w->mu);
     return ui_to_norm(&PARAMS[i], ui_value(w, key));
@@ -836,6 +854,7 @@ static void display(Plugin *w, int idx, char *buf, size_t n) {
         else std::snprintf(buf, n, "- (LEARN)");
         return;
     case MONITOR: std::snprintf(buf, n, "%s", mp.last); return;
+    case TEMPLATE: mp.template_name(buf, n); return;
     case NUM:
         if (m.type == D_NOTE) note_name(buf, n, m.num);
         else if (m.type == D_PROG) std::snprintf(buf, n, "- (MIN..MAX)");
