@@ -59,6 +59,7 @@ struct Map {
     uint8_t out = 0, ch = 0, type = D_OFF, num = 0, lo = 0, hi = 127, btn = B_MOMENT;
     uint8_t enc = ENC_ABS;
     int16_t val = -1;               /* where the control stands, 0..127; -1 = not known yet */
+    char name[24] = "";             /* label the user gave the slot (phone view), "" = none */
 };
 struct Run { int last = -1; bool high = false, on = false; int note = -1; bool caught = false; int prev = -1; };
 struct Settings {
@@ -71,6 +72,7 @@ struct Settings {
     int arrows = 0;    /* Launch Control arrows: 0 pages/slots, 1 free to map */
     int feedback = 1;  /* send positions back: 0 off, 1 to the EC4 / E16, 2 also to every other USB controller */
     int takeover = 1;  /* absolute pots without feedback: 0 jump, 1 pickup */
+    int web = 1;       /* phone view (HTTP server of the plugin) on */
 };
 struct Msg { uint8_t port, len, d[3]; };
 
@@ -114,6 +116,7 @@ public:
     bool lc_seen = false;    /* a Launch Control has sent something */
     bool flash_req = false;  /* template changed: the wrapper shows its number on the pads for a moment */
     char last[96] = "-";
+    int last_slot = -1;      /* slot the last move drove (phone view highlights it) */
     int changed = 0;
     Msg q[QMAX];
     int nq = 0;
@@ -173,6 +176,7 @@ public:
         s.page = p;
         uncatch();
         feedback_all();
+        last_slot = -1;
         changed |= CH_PAGE;
     }
     void select(int i) {
@@ -295,6 +299,11 @@ public:
         if (!moved && waiting >= 0) {   /* PICKUP: show where the pot has to go */
             std::snprintf(last, sizeof last, "%s: TO %d", nm, waiting);   /* "LC U1 KNOB 5: TO 100" */
         }
+        last_slot = first;
+        if (map[first].name[0] && (moved || waiting < 0)) {   /* a named slot: its name on the Force's screen */
+            if (stype == S_CC) std::snprintf(last, sizeof last, "%s = %d", map[first].name, d2);
+            else std::snprintf(last, sizeof last, "%s %s", map[first].name, press ? "ON" : "OFF");
+        }
         if (s.follow) select(first);
     }
 
@@ -365,12 +374,12 @@ public:
     static bool is_default(const Map &m) {
         Map d;
         return !m.used && m.type == d.type && m.page == d.page && m.out == d.out && m.ch == d.ch &&
-               m.num == d.num && m.lo == d.lo && m.hi == d.hi && m.btn == d.btn && m.enc == d.enc;
+               m.num == d.num && m.lo == d.lo && m.hi == d.hi && m.btn == d.btn && m.enc == d.enc && !m.name[0];
     }
     std::string state() const {
         char b[128];
-        std::snprintf(b, sizeof b, "pg=%d;fo=%d;le=%d;th=%d;li=%d;in=%d;ar=%d;fb=%d;to=%d;",
-                      s.page, s.follow, s.leds, s.thru, s.link, s.input, s.arrows, s.feedback, s.takeover);
+        std::snprintf(b, sizeof b, "pg=%d;fo=%d;le=%d;th=%d;li=%d;in=%d;ar=%d;fb=%d;to=%d;wb=%d;",
+                      s.page, s.follow, s.leds, s.thru, s.link, s.input, s.arrows, s.feedback, s.takeover, s.web);
         std::string t = b;
         for (int i = 0; i < NMAP; i++) {
             const Map &m = map[i];
@@ -378,8 +387,50 @@ public:
             std::snprintf(b, sizeof b, "m%d=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d;", i + 1, (int)m.used, m.dev, m.sch,
                           m.stype, m.snum, m.page, m.out, m.ch, m.type, m.num, m.lo, m.hi, m.btn, m.enc, (int)m.val);
             t += b;
+            if (m.name[0]) { t += "n" + std::to_string(i + 1) + "=" + esc(m.name) + ";"; }
         }
         return t;
+    }
+    /* names go into the "key=value;" text percent-encoded (no ';' '=' '%' or controls inside) */
+    static std::string esc(const char *s) {
+        std::string o;
+        char b[4];
+        for (; *s; s++) {
+            const unsigned char c = (unsigned char)*s;
+            if (c < 32 || c == ';' || c == '=' || c == '%' || c == '\t' || c >= 127) { std::snprintf(b, sizeof b, "%%%02X", c); o += b; }
+            else o += (char)c;
+        }
+        return o;
+    }
+    static std::string unesc(const char *s) {
+        std::string o;
+        for (; *s; s++) {
+            if (*s == '%' && s[1] && s[2]) {
+                const char h[3] = {s[1], s[2], 0};
+                o += (char)std::strtol(h, nullptr, 16);
+                s += 2;
+            } else if (*s == '+') o += ' ';
+            else o += *s;
+        }
+        return o;
+    }
+    void set_name(int i, const std::string &n) {
+        if (i < 0 || i >= NMAP) return;
+        std::string t;
+        for (char c : n) if ((unsigned char)c >= 32 && c != 127) t += c;   /* printable only */
+        std::snprintf(map[i].name, sizeof map[i].name, "%s", t.c_str());
+        changed |= CH_SLOT;
+    }
+    /* "CC 74 · CH 5 · OUT C" (ASCII separators: the Force's font) */
+    void target_text(const Map &m, char *b, size_t n) const {
+        const char o = (char)('A' + m.out);
+        switch (m.type) {
+        case D_CC: std::snprintf(b, n, "CC %d / CH %d / %c", m.num, m.ch + 1, o); break;
+        case D_NOTE: std::snprintf(b, n, "NOTE %d / CH %d / %c", m.num, m.ch + 1, o); break;
+        case D_PROG: std::snprintf(b, n, "PROGRAM / CH %d / %c", m.ch + 1, o); break;
+        case D_PAGE: if (m.num == 0) std::snprintf(b, n, "NEXT PAGE"); else std::snprintf(b, n, "PAGE %d", m.num > 4 ? 4 : m.num); break;
+        default: std::snprintf(b, n, "OFF"); break;
+        }
     }
     /* unknown keys are skipped (a wrapper's own keys like "prog=" live in the same text) */
     void apply(const std::string &t) {
@@ -404,6 +455,11 @@ public:
             else if (k == "ar") s.arrows = x != 0;
             else if (k == "fb") s.feedback = clampi(x, 0, 2);
             else if (k == "to") s.takeover = x != 0;
+            else if (k == "wb") s.web = x != 0;
+            else if (k.size() > 1 && k[0] == 'n' && k != "nm") {
+                const int i = std::atoi(k.c_str() + 1) - 1;
+                if (i >= 0 && i < NMAP) std::snprintf(map[i].name, sizeof map[i].name, "%s", unesc(v).c_str());
+            }
             else if (k.size() > 1 && k[0] == 'm') {
                 const int i = std::atoi(k.c_str() + 1) - 1;
                 int f[15] = {0};

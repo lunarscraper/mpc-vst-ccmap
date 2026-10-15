@@ -16,6 +16,9 @@
 #include <vector>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 struct AEffect;
 typedef intptr_t (*audioMasterCallback)(AEffect *, int32_t, int32_t, intptr_t, void *, float);
@@ -93,6 +96,7 @@ static void set(AEffect *e, const char *name, double v) {
     if (s == "Slot") { lo = 1; hi = 128; }
     else if (s == "Page") hi = 4;
     else if (s == "Encoder" || s == "Feedback" || s == "LEDs") hi = 2;
+    else if (s == "Web View") hi = 1;
     else if (s == "Out" || s == "Active Page") hi = 3;
     else if (s == "Channel") { lo = 1; hi = 16; }
     else if (s == "Type") hi = 4;
@@ -108,6 +112,24 @@ static void block(AEffect *e) {
     e->processReplacing(e, in, out, 128);
 }
 
+/* the phone view: one GET against 127.0.0.1:CCMAP_WEB_PORT, body only ("" on failure) */
+static std::string http_get(const char *path) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)std::atoi(std::getenv("CCMAP_WEB_PORT")));
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    std::string r;
+    for (int t = 0; t < 20 && connect(fd, (sockaddr *)&a, sizeof a) < 0; t++) { usleep(50000); close(fd); fd = socket(AF_INET, SOCK_STREAM, 0); }
+    std::string req = std::string("GET ") + path + " HTTP/1.1\r\nHost: x\r\n\r\n";
+    if (send(fd, req.data(), req.size(), MSG_NOSIGNAL) < 0) { close(fd); return r; }
+    char b[4096];
+    ssize_t n;
+    while ((n = recv(fd, b, sizeof b, 0)) > 0) r.append(b, (size_t)n);
+    close(fd);
+    size_t h = r.find("\r\n\r\n");
+    return h == std::string::npos ? "" : r.substr(h + 4);
+}
 static AEffect *open_plugin(void *lib) {
     typedef AEffect *(*entry_t)(audioMasterCallback);
     entry_t entry = (entry_t)dlsym(lib, "VSTPluginMain");
@@ -124,6 +146,7 @@ int main(int argc, char **argv) {
     if (fd >= 0) close(fd);
     unlink(bank);
     setenv("CCMAP_PRESETS", bank, 1);
+    if (!std::getenv("CCMAP_WEB_PORT")) setenv("CCMAP_WEB_PORT", "18080", 1);
     void *lib = dlopen(argv[1], RTLD_NOW);
     if (!lib) { std::printf("FAIL: dlopen %s\n", dlerror()); return 1; }
     t_in = (in_fn)dlsym(lib, "ccmap_test_input");
@@ -584,6 +607,47 @@ int main(int argc, char **argv) {
     o = take(e);
     CHECK(is(o, 0, 0xB0, 20, 10), "E16 no pickup: %s", dump(o).c_str());
     e->dispatcher(e, 1, 0, 0, nullptr, 0);
+
+    /* ---- 0.5.0: phone view, slot names ---- */
+    e = open_plugin(lib);
+    {
+        const std::string page = http_get("/");
+        CHECK(page.find("<title>CC Map</title>") != std::string::npos, "phone page served (%zu bytes)", page.size());
+        set(e, "Slot", 1); press(e, "Learn"); t_in(e, DEV_LC, 0xB0, 21, 30); set(e, "Number", 74); set(e, "Channel", 5);
+        set(e, "Slot", 2); press(e, "Learn"); t_in(e, DEV_E16, 0xB0, 7, 99);
+        take(e);
+        std::string js = http_get("/state");
+        CHECK(js.find("\"tmpl\":\"USER 1\"") != std::string::npos, "state: template: %.80s", js.c_str());
+        CHECK(js.find("\"target\":\"CC 74 / CH 5 / A\"") != std::string::npos, "state: knob 1 target");
+        CHECK(js.find("\"src\":\"E16 CH1 CC 7\"") != std::string::npos, "state: E16 in others");
+        CHECK(http_get("/label?slot=1&name=Clem%20Cutoff").find("ok") != std::string::npos, "label set");
+        set(e, "Slot", 1);
+        CHECK(display(e, "Slot") == "1 Clem Cutoff", "slot shows the name: '%s'", display(e, "Slot").c_str());
+        js = http_get("/state");
+        CHECK(js.find("\"label\":\"Clem Cutoff\"") != std::string::npos, "state carries the name");
+        t_in(e, DEV_LC, 0xB0, 21, 31);
+        take(e);
+        CHECK(display(e, "Last") == "Clem Cutoff = 31", "LAST shows the name: '%s'", display(e, "Last").c_str());
+        js = http_get("/state");
+        CHECK(js.find("\"last_slot\":0") != std::string::npos, "last slot highlighted");
+        http_get("/label?slot=2&name=A%3Bb%3Dc%25");   /* separators inside a name survive the state text */
+        CHECK(http_get("/label?slot=999&name=x").find("slot") != std::string::npos, "bad slot refused");
+        CHECK(http_get("/nothing").find("not found") != std::string::npos, "404");
+        CHECK(display(e, "Phone Address").find(":18080") != std::string::npos, "address shown: '%s'", display(e, "Phone Address").c_str());
+        void *ck2 = nullptr;
+        intptr_t n2 = e->dispatcher(e, 23, 0, 0, &ck2, 0);
+        std::string c2((const char *)ck2, (size_t)n2);
+        set(e, "Web View", 0);
+        CHECK(display(e, "Phone Address") == "OFF", "web view off");
+        CHECK(http_get("/state").empty(), "server stopped");
+        e->dispatcher(e, 1, 0, 0, nullptr, 0);
+        e = open_plugin(lib);
+        e->dispatcher(e, 24, 0, (intptr_t)c2.size(), (void *)c2.data(), 0);
+        set(e, "Slot", 2);
+        CHECK(display(e, "Slot") == "2 A;b=c%", "name with separators restored: '%s'", display(e, "Slot").c_str());
+        CHECK(http_get("/state").find("Clem Cutoff") != std::string::npos, "restored project serves its names");
+        e->dispatcher(e, 1, 0, 0, nullptr, 0);
+    }
 
     /* ---- stress: random parameters and MIDI ---- */
     e = open_plugin(lib);

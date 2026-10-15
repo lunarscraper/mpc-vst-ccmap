@@ -18,6 +18,8 @@
  *        +--> "Link A": Out A also feeds every other plugin's "Control In" port (Euclidier FX,
  *        |    Acid FX, Maze FX ...), no routing needed
  *        +--> Launch Control LEDs over SysEx (pads show their slot, arrows show the pages)
+ *        +--> PHONE VIEW: a web page on port 8000 of the Force's WLAN (ccmap_web.h): the Launch Control with
+ *             the names, targets and positions of the active template, other controllers below; tap = name
  *        +--> FEEDBACK: the slots' positions back to a Faderfox EC4 / OXI E16 (value display, no jumps) on a
  *             page change, a load and when it is plugged in; PICKUP for pots without feedback
  *
@@ -56,6 +58,8 @@
 #include "params.h"
 #include "popup.h"    /* mpc-vst-plugins wrapper/popup.h, copied into build/ by build.sh */
 #include "ccmap_core.h"
+#include "ccmap_web.h"
+#include "ccmap_page.h"   /* page/index.html, embedded by gen_page.py */
 
 /* ---- VST2 ABI (hand-written; no Steinberg SDK) ---------------------------- */
 struct AEffect;
@@ -87,7 +91,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.4.0"
+#define BUILD_ID "ccmap-0.5.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -101,12 +105,14 @@ enum {
     /* 0.2.0, appended */
     ENC, FEEDBACK, TAKEOVER, SEND,
     /* 0.3.0 */
-    TEMPLATE, NKEYS
+    TEMPLATE,
+    /* 0.5.0 */
+    WEB, WEB_ADDR, NKEYS
 };
 static const char *const KEYS[NKEYS] = {
     "slot", "learn", "source", "page", "out", "ch", "type", "num", "lo", "hi", "btn", "clear",
     "cur_page", "follow", "leds", "thru", "link", "input", "arrows", "monitor", "preset", "load", "save",
-    "enc", "feedback", "takeover", "send", "template",
+    "enc", "feedback", "takeover", "send", "template", "web", "web_addr",
 };
 static int IDX[NKEYS];
 static int KEY_OF[NPARAMS];   /* PARAMS[] position -> key enum, -1 = not ours (popup flags) */
@@ -127,6 +133,7 @@ struct Plugin {
     std::atomic<bool> redisplay{false};
     std::atomic<int> cur{0};             /* selected preset slot, 0-based */
     std::vector<uint8_t> chunk;
+    ccweb::Server *web = nullptr;        /* phone view, owner instance only */
     /* diagnostics */
     std::atomic<long> n_in{0}, n_out{0}, n_ignored{0}, n_fb{0};
 #ifndef NO_ALSA
@@ -203,6 +210,7 @@ static int ui_value(Plugin *w, int k) {
     case ENC: return m.enc;
     case FEEDBACK: return mp.s.feedback;
     case TAKEOVER: return mp.s.takeover;
+    case WEB: return mp.s.web;
     case PRESET: return w->cur.load() + 1;
     default: return 0;
     }
@@ -237,6 +245,9 @@ static std::string factory_euclidier() {
         b.type = D_CC; b.ch = 15; b.num = (uint8_t)(10 * L + 2);
         Map p = lc_src(S_NOTE, L <= 4 ? 8 + L : 20 + L, 0);
         p.type = D_CC; p.ch = 15; p.num = (uint8_t)(10 * L); p.btn = B_TOGGLE;
+        std::snprintf(a.name, sizeof a.name, "L%d Steps", L);
+        std::snprintf(b.name, sizeof b.name, "L%d Fill", L);
+        std::snprintf(p.name, sizeof p.name, "Lane %d", L);
         f.map[k++] = a; f.map[k++] = b; f.map[k++] = p;
     }
     return f.state();
@@ -703,6 +714,85 @@ extern "C" __attribute__((visibility("default"))) int ccmap_test_flash(AEffect *
 }
 #endif
 
+/* ---- phone view (ccmap_web.h) ---------------------------------------------------------- */
+static std::string state_json(Plugin *w) {
+    std::lock_guard<std::mutex> lk(w->mu);
+    const Mapper &mp = w->mp;
+    std::string j;
+    char b[160], tgt[48], src[48], tn[32];
+    uint8_t led[NLEDS];
+    mp.leds(led);
+    mp.template_name(tn, sizeof tn);
+    std::snprintf(b, sizeof b, "{\"lc\":%s,\"tmpl\":%s,\"tmpl_led\":%d,\"page\":%d,\"learn\":%s,\"last_slot\":%d,\"last\":",
+                  mp.lc_seen ? "true" : "false", ccweb::js(tn).c_str(), Mapper::template_colour(mp.lc_ch), mp.s.page + 1,
+                  mp.learn ? "true" : "false", mp.last_slot);
+    j = b;
+    j += ccweb::js(mp.last);
+    /* the Launch Control of the active template and page: 16 knobs, 8 pads */
+    auto lc_slot = [&](int stype, int num) {
+        for (int i = 0; i < NMAP; i++) if (mp.on_page(mp.map[i]) && mp.matches(mp.map[i], DEV_LC, mp.lc_ch, stype, num)) return i;
+        return -1;
+    };
+    auto item = [&](int i, const std::string extra) {   /* by value: callers may pass b, which item() reuses */
+        std::string o;
+        if (i < 0) { o = std::string("{\"slot\":-1,\"label\":\"\",\"target\":\"\",\"val\":-1") + extra + "}"; return o; }
+        const Map &m = mp.map[i];
+        mp.target_text(m, tgt, sizeof tgt);
+        int val = m.val;
+        if (m.stype == S_NOTE) val = (m.btn == B_TOGGLE ? mp.run[i].on : mp.run[i].high) ? 127 : 0;
+        std::snprintf(b, sizeof b, "{\"slot\":%d,\"val\":%d,\"label\":", i, val);
+        o = b;
+        o += ccweb::js(m.name);
+        o += ",\"target\":" + ccweb::js(tgt) + extra + "}";
+        return o;
+    };
+    j += ",\"knobs\":[";
+    for (int k = 0; k < 16; k++) j += (k ? "," : "") + item(lc_slot(S_CC, k < 8 ? 21 + k : 41 + k - 8), "");
+    j += "],\"pads\":[";
+    for (int p = 0; p < 8; p++) {
+        std::snprintf(b, sizeof b, ",\"led\":%d", led[p]);
+        j += (p ? "," : "") + item(lc_slot(S_NOTE, p < 4 ? 9 + p : 25 + p - 4), std::string(b));
+    }
+    /* every other slot of the page (EC4, E16, UC-33, other USB, other LC templates are left out) */
+    j += "],\"others\":[";
+    bool first = true;
+    for (int i = 0; i < NMAP; i++) {
+        const Map &m = mp.map[i];
+        if (!m.used || m.dev == DEV_LC || !mp.on_page(m)) continue;
+        src_name(src, sizeof src, m.dev, m.sch, m.stype, m.snum);
+        const std::string extra = ",\"src\":" + ccweb::js(src);
+        j += (first ? "" : ",") + item(i, extra);
+        first = false;
+    }
+    j += "]}";
+    return j;
+}
+static void web_label(Plugin *w, int slot, const std::string &name) {
+    { std::lock_guard<std::mutex> lk(w->mu); w->mp.set_name(slot, name); collect(w); }
+    w->redisplay.store(true);
+    LOG("[ccmap_vst] slot %d named '%s' (phone view)\n", slot + 1, name.c_str());
+}
+/* start or stop the phone view to match the WEB VIEW setting; never call with w->mu held */
+static void web_apply(Plugin *w) {
+    if (!w->owner) return;
+    bool want;
+    { std::lock_guard<std::mutex> lk(w->mu); want = w->mp.s.web != 0; }
+    if (want && !w->web) {
+        int port = 8000;
+        if (const char *p = std::getenv("CCMAP_WEB_PORT")) port = std::atoi(p);
+        w->web = new ccweb::Server();
+        w->web->page = CCMAP_PAGE;
+        w->web->state = [w] { return state_json(w); };
+        w->web->set_label = [w](int i, const std::string &n) { web_label(w, i, n); };
+        if (!w->web->start(port)) { LOG("[ccmap_vst] phone view: port %d not available\n", port); delete w->web; w->web = nullptr; }
+        else LOG("[ccmap_vst] phone view on http://%s\n", w->web->address().c_str());
+    } else if (!want && w->web) {
+        w->web->stop(); delete w->web; w->web = nullptr;
+        LOG("[ccmap_vst] phone view off\n");
+    }
+    w->redisplay.store(true);
+}
+
 /* ---- audio: pass through, report our own parameter changes to the host ---------- */
 static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
     Plugin *w = (Plugin *)e->object;
@@ -742,7 +832,7 @@ static void setParameter(AEffect *e, int32_t i, float n) {
     const param_t *p = &PARAMS[i];
     if (popup_set(w->open, i, n)) return;
     const int key = KEY_OF[i];
-    if (key < 0 || key == SOURCE || key == MONITOR || key == TEMPLATE) return;   /* readouts */
+    if (key < 0 || key == SOURCE || key == MONITOR || key == TEMPLATE || key == WEB_ADDR) return;   /* readouts */
     if (key == PRESET) {   /* browsing only: LOAD loads, so turning the knob can't wipe the map */
         const int v = (int)std::lround(clamp01(n) * (NSLOTS - 1));
         if (v != w->cur.load()) { w->cur.store(v); w->redisplay.store(true); }
@@ -753,7 +843,7 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         const bool rising = down && !w->down[i];   /* an echo of our own automate must not fire again */
         w->down[i] = down;
         if (!rising) return;
-        if (key == LOAD) slot_load(w);
+        if (key == LOAD) { slot_load(w); web_apply(w); }
         else if (key == SAVE) slot_save(w);
         else if (key == SEND) {    /* FEEDBACK now: the controllers show the page's positions */
             std::lock_guard<std::mutex> lk(w->mu);
@@ -810,11 +900,13 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         case ENC: if (m.enc != u) { edit_slot(w); m.enc = (uint8_t)u; } break;
         case FEEDBACK: if (mp.s.feedback != u) { mp.s.feedback = u; mp.feedback_all(); } break;
         case TAKEOVER: if (mp.s.takeover != u) { mp.s.takeover = u; mp.uncatch(); } break;
+        case WEB: mp.s.web = u; break;
         default: break;
         }
         collect(w);
         if (key == SLOT) w->pending.fetch_and(~(1ull << i));   /* the host knows this one */
     }
+    if (key == WEB) web_apply(w);
     w->redisplay.store(true);
     wake(w);
     if (!nudge) popup_picked(w->open, w->release, i);
@@ -824,7 +916,7 @@ static float getParameter(AEffect *e, int32_t i) {
     if (i < 0 || i >= NPARAMS) return 0.0f;
     if (popup_is(i)) return w->open[i];
     const int key = KEY_OF[i];
-    if (key < 0 || is_trigger(key) || key == SOURCE || key == MONITOR || key == TEMPLATE) return 0.0f;
+    if (key < 0 || is_trigger(key) || key == SOURCE || key == MONITOR || key == TEMPLATE || key == WEB_ADDR) return 0.0f;
     if (key == PRESET) return (float)w->cur.load() / (NSLOTS - 1);
     std::lock_guard<std::mutex> lk(w->mu);
     return ui_to_norm(&PARAMS[i], ui_value(w, key));
@@ -841,13 +933,14 @@ static void display(Plugin *w, int idx, char *buf, size_t n) {
     if (popup_is(idx)) { std::snprintf(buf, n, "%s", pp->opts[norm_to_ui(pp, w->open[idx])]); return; }
     if (key < 0 || is_trigger(key)) return;
     if (key == PRESET) { std::snprintf(buf, n, "%s", slot_title(clampi(w->cur.load(), 0, NSLOTS - 1)).c_str()); return; }
+    if (key == WEB_ADDR) { std::snprintf(buf, n, "%s", w->web ? w->web->address().c_str() : "OFF"); return; }
     std::lock_guard<std::mutex> lk(w->mu);
     const Mapper &mp = w->mp;
     const Map &m = mp.map[mp.sel];
     char src[48];
     src_name(src, sizeof src, m.dev, m.sch, m.stype, m.snum);
     switch (key) {
-    case SLOT: std::snprintf(buf, n, "%d %s", mp.sel + 1, m.used ? src : "(empty)"); return;
+    case SLOT: std::snprintf(buf, n, "%d %s", mp.sel + 1, m.name[0] ? m.name : m.used ? src : "(empty)"); return;
     case SOURCE:
         if (mp.learn) std::snprintf(buf, n, "MOVE A CONTROL ...");
         else if (m.used) std::snprintf(buf, n, "%s", src);
@@ -903,6 +996,7 @@ static intptr_t set_chunk(Plugin *w, const void *data, intptr_t len) {
         mark_all(w);
     }
     wake(w);
+    web_apply(w);
     return 1;
 }
 
@@ -911,6 +1005,7 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     switch (op) {
     case effOpen: return 1;
     case effClose: {
+        if (w->web) { w->web->stop(); delete w->web; w->web = nullptr; }
         alsa_close(w);
         Plugin *me = w;
         g_owner.compare_exchange_strong(me, nullptr);
@@ -919,7 +1014,7 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
         return 1;
     }
     case effSetProgram:
-        if (v >= 0 && v < NSLOTS) { w->cur.store((int)v); slot_load(w); w->redisplay.store(true); wake(w); }
+        if (v >= 0 && v < NSLOTS) { w->cur.store((int)v); slot_load(w); w->redisplay.store(true); wake(w); web_apply(w); }
         return 0;
     case effGetProgram: return w->cur.load();
     case effGetProgramName: if (p) copy_str(p, slot_title(clampi(w->cur.load(), 0, NSLOTS - 1)).c_str(), 24); return 0;
@@ -978,7 +1073,7 @@ extern "C" __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMa
     w->mp.changed = 0;
     Plugin *none = nullptr;
     w->owner = g_owner.compare_exchange_strong(none, w);
-    if (w->owner) alsa_open(w);
+    if (w->owner) { alsa_open(w); web_apply(w); }
     else LOG("[ccmap_vst] another CC Map instance already runs: this one stays passive\n");
 
     AEffect *e = &w->fx;

@@ -6,10 +6,11 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.4.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.5.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
+0.5.0: Handy-Ansicht im WLAN der Force, Namen für Slots.
 Projekte und Presets älterer Versionen laden weiter.
 
 ## Warum ein Insert-Effekt
@@ -168,6 +169,31 @@ Presets pro Plugin gehen genauso, dann aber immer nur eins zur Zeit.
   einfach jede Gruppe lernen, Seite ALL lassen.
 - Die Push-Taster der Encoder (z. B. Typ Note) lassen sich wie Pads lernen, etwa als TOGGLE oder als PAGE.
 
+## Handy-Ansicht (Tab SYNC)
+
+CC Map stellt im WLAN der Force eine Webseite bereit. Darauf siehst du die Launch Control des aktiven
+Templates und der aktiven Seite: jeden Regler mit Namen, Ziel (z. B. `CC 74 / CH 5 / A`) und Stellung,
+die Pads in ihrer LED-Farbe, darunter alle Slots der übrigen Controller (EC4, E16, UC-33 …). Der zuletzt
+bewegte Regler ist gelb umrandet. Die Seite aktualisiert sich etwa viermal pro Sekunde.
+
+So öffnest du sie:
+1. Die Force ins WLAN bringen (Einstellungen der Force → WLAN).
+2. In CC Map den Tab **SYNC** öffnen: Unter „OPEN ON PHONE: HTTP://" steht die Adresse, z. B.
+   `192.168.178.40:8000`.
+3. Das Handy ins selbe WLAN, im Browser `http://` und die Adresse eingeben. Tipp: als Lesezeichen
+   oder „Zum Home-Bildschirm" sichern.
+
+**Namen vergeben:** Auf dem Handy einen Regler antippen, Namen eintippen, „Speichern". Der Name
+erscheint auch auf der Force (SLOT-Anzeige und LAST, z. B. `Clem Cutoff = 87`) und wird mit Projekt und
+Preset gespeichert. Das Werk-Preset „LC > EUCLIDIER FX" bringt seine Namen schon mit.
+
+Hinweise:
+- **PHONE VIEW** (Tab SYNC) schaltet die Seite ab. Jeder im selben WLAN kann sie öffnen und Namen
+  ändern, aber nichts anderes; im Heimnetz unkritisch, in fremden Netzen lieber abschalten.
+- Steht dort `NO NETWORK`, ist die Force nicht im WLAN; die Adresse erscheint, sobald sie verbunden ist.
+- Lässt sich die Seite nicht öffnen, obwohl eine Adresse angezeigt wird, blockiert vermutlich die Force
+  den Port; dann bitte `/tmp/ccmap_vst.log` schicken.
+
 ## OXI E16
 
 - Wird am Namen („E16") erkannt; OXI One und OXI Coral zählen weiter als normale USB-Geräte.
@@ -186,6 +212,7 @@ Presets pro Plugin gehen genauso, dann aber immer nur eins zur Zeit.
 |---|---|
 | `vst/ccmap_core.h` | Mapping-Kern ohne VST und ALSA (Learn, Seiten, Ziele, LEDs, Zustand als Text) |
 | `vst/ccmap_vst.cpp` | VST2-Hülle (handgeschrieben), ALSA-Thread, Presets, Projekt-Chunk |
+| `vst/ccmap_web.h`, `vst/page/index.html` | Handy-Ansicht: kleiner HTTP-Server (Port 8000) und die Seite; `gen_page.py` bettet sie als `ccmap_page.h` ein |
 | `vst/module.json`, `vst/vst.json`, `vst/layout.conf` | Parameter und Skin für `gen_vst.py` |
 | `vst/captions.py`, `vst/fonts/` | Beschriftungen in Titillium Web (aus mpc-vst-euclidier, SIL OFL) |
 | `vst/host_test.cpp`, `vst/test.sh` | Offline-Test über Test-Hooks statt ALSA |

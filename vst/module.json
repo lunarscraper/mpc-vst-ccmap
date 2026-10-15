@@ -28,6 +28,8 @@
     {"key": "feedback", "name": "Feedback", "options": ["OFF", "EC4 + E16", "+ ALL USB"]},
     {"key": "takeover", "name": "Takeover", "options": ["JUMP", "PICKUP"]},
     {"key": "send", "name": "Send Values", "access": "write"},
-    {"key": "template", "name": "LC Template", "min": 0, "max": 1}
+    {"key": "template", "name": "LC Template", "min": 0, "max": 1},
+    {"key": "web", "name": "Web View", "options": ["OFF", "ON"]},
+    {"key": "web_addr", "name": "Phone Address", "min": 0, "max": 1}
   ]
 }

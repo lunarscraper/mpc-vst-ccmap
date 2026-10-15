@@ -3,7 +3,7 @@
 #   vst/build/ccmap.so              -> /sdcard/vst/ on the device
 #   vst/build/pluginlist-entry.xml  the <PLUGIN ... category="Effect"> line for MPC.settings' pluginList-arm
 #   vst/build/skin/                 -> /sdcard/Synths/ on the device
-# ccmap_vst.cpp + the mapper ccmap_core.h, linked against the device's libasound (ALSA seq ports, as
+# ccmap_vst.cpp + the mapper ccmap_core.h + the phone view ccmap_web.h (page/index.html), linked against the device's libasound (ALSA seq ports, as
 # in Euclidier FX). vst.json/module.json only feed tools/gen_vst.py for params.h + the skin;
 # captions.py then redraws the labels in Titillium Web at the knob names' size. Offline test: test.sh.
 set -euo pipefail
@@ -31,6 +31,7 @@ else
 fi
 grep -q "PLUG_EFFECT" build/params.h || { echo "params.h has no PLUG_EFFECT"; exit 1; }
 cp "$MPC_VST/wrapper/popup.h" build/   # popup open-flag handling shared with mpc-vst's own wrapper
+python3 gen_page.py                    # page/index.html (phone view) -> ccmap_page.h
 
 # 3. the plugin (armhf, glibc 2.36 so it loads on the device's 2.39)
 docker run --rm --platform linux/arm/v7 -v "$PWD":/b -w /b arm32v7/gcc:12 bash -euxc '
