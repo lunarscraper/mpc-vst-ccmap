@@ -24,6 +24,10 @@
  *        +--> FEEDBACK: the slots' positions back to a Faderfox EC4 / OXI E16 (value display, no jumps) on a
  *             page change, a load and when it is plugged in; PICKUP for pots without feedback
  *
+ *   BAUKASTEN (ccmap_kit.h, page/kit.html): pages of faders, knobs, buttons, toggles and XY pads the
+ *   user builds on the phone; every element sends its own CC on its own port and channel (Out A..D).
+ *   A second hub server of the same plugin, so the hub shows it as a tile of its own.
+ *
  * All ALSA traffic runs on one thread of its own (poll(), no dependence on the audio callback, so
  * mapping also works while the host doesn't call an idle insert). The host's thread and that thread
  * share the mapper under Plugin::mu; outputs are queued in the mapper and only that thread sends.
@@ -61,6 +65,8 @@
 #include "ccmap_core.h"
 #include "ccmap_web.h"
 #include "ccmap_page.h"   /* page/index.html, embedded by gen_page.py */
+#include "ccmap_kit.h"
+#include "ccmap_kit_page.h"   /* page/kit.html (BAUKASTEN), embedded by gen_page.py */
 
 /* ---- VST2 ABI (hand-written; no Steinberg SDK) ---------------------------- */
 struct AEffect;
@@ -92,7 +98,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.7.0"
+#define BUILD_ID "ccmap-0.8.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -138,6 +144,8 @@ struct Plugin {
     std::vector<uint8_t> chunk;
     forcehub::Server *web = nullptr;     /* phone view on the shared hub, owner instance only */
     ccweb::Hooks hooks;
+    cckit::Kit kit;                      /* BAUKASTEN, guarded by mu */
+    forcehub::Server *kitweb = nullptr;  /* its own tile on the hub, owner instance only */
     /* diagnostics */
     std::atomic<long> n_in{0}, n_out{0}, n_ignored{0}, n_fb{0};
 #ifndef NO_ALSA
@@ -279,6 +287,55 @@ static std::string factory_pages(bool by_port) {
     }
     return f.state();
 }
+/* DrumGen / DrumGen FX (mpc-vst-drumgen 1.1.0) on CONTROL CH 15: lane L = CC 10*L + (0 on, 2 pattern, 3 density,
+ * 4 length, 5 note, 7 lock, 8 dice), 100 style, 101 generate, 102 variate, 103 random, 104 swing, 105 gate, 106 auto,
+ * 108 load, FX 90 remix on, 92 type, 93 every, 95 echo on, 96 time, 97 repeats, 98 probability, 99 falloff, 111 glitch
+ * on, 112 repeats, 113 gate, 114 probability, 115 random, 107 preset. Channel 15, not DrumGen's default 16: the Euclidier map (preset 1) uses
+ * 16 and the same CC numbers.
+ *   page 1 PLAY    density 1-8 / pattern 1-8, pads lane on/off
+ *   page 2 LANES   length 1-8 / note 1-8, pads dice
+ *   page 3 GLOBAL  style, random, swing, gate, auto, remix type, remix every, echo time /
+ *                  echo repeats, echo prob, echo falloff, glitch repeats, glitch gate, glitch prob, glitch random,
+ *                  preset; pads generate, variate, remix on, echo on, glitch on, load preset
+ *   page 4 LOCK    pads lock 1-8 (knobs free for LEARN) */
+static std::string factory_drumgen() {
+    Mapper f;
+    f.s.link = 1;
+    int k = 0;
+    auto knob = [&](int pg, int i, int cc, const char *name) {   /* i 0..15: top row 0..7, bottom row 8..15 */
+        Map m = lc_src(S_CC, i < 8 ? 21 + i : 41 + i - 8, pg);
+        m.type = D_CC; m.ch = 14; m.num = (uint8_t)cc;
+        std::snprintf(m.name, sizeof m.name, "%s", name);
+        f.map[k++] = m;
+    };
+    auto pad = [&](int pg, int i, int cc, bool toggle, const char *name) {
+        Map m = lc_src(S_NOTE, i < 4 ? 9 + i : 25 + i - 4, pg);
+        m.type = D_CC; m.ch = 14; m.num = (uint8_t)cc; m.btn = toggle ? B_TOGGLE : B_MOMENT;
+        std::snprintf(m.name, sizeof m.name, "%s", name);
+        f.map[k++] = m;
+    };
+    char nm[24];
+    for (int L = 1; L <= 8; L++) {
+        std::snprintf(nm, sizeof nm, "L%d Density", L); knob(1, L - 1, 10 * L + 3, nm);
+        std::snprintf(nm, sizeof nm, "L%d Pattern", L); knob(1, 7 + L, 10 * L + 2, nm);
+        std::snprintf(nm, sizeof nm, "L%d On", L); pad(1, L - 1, 10 * L, true, nm);
+        std::snprintf(nm, sizeof nm, "L%d Length", L); knob(2, L - 1, 10 * L + 4, nm);
+        std::snprintf(nm, sizeof nm, "L%d Note", L); knob(2, 7 + L, 10 * L + 5, nm);
+        std::snprintf(nm, sizeof nm, "L%d Dice", L); pad(2, L - 1, 10 * L + 8, false, nm);
+        std::snprintf(nm, sizeof nm, "L%d Lock", L); pad(4, L - 1, 10 * L + 7, true, nm);
+    }
+    static const struct { int cc; const char *name; } G[16] = {
+        {100, "Style"}, {103, "Random"}, {104, "Swing"}, {105, "Gate"}, {106, "Auto"}, {92, "Remix Type"}, {93, "Remix Every"}, {96, "Echo Time"},
+        {97, "Echo Repeats"}, {98, "Echo Prob"}, {99, "Echo Falloff"}, {112, "Glitch Repeats"}, {113, "Glitch Gate"}, {114, "Glitch Prob"}, {115, "Glitch Random"}, {107, "Preset"}};
+    for (int i = 0; i < 16; i++) knob(3, i, G[i].cc, G[i].name);
+    pad(3, 0, 101, false, "Generate");
+    pad(3, 1, 102, false, "Variate");
+    pad(3, 2, 90, true, "Remix");
+    pad(3, 3, 95, true, "Echo");
+    pad(3, 4, 111, true, "Glitch");
+    pad(3, 5, 108, false, "Load Preset");
+    return f.state();
+}
 struct Factory { const char *name; std::string state; };
 static std::vector<Factory> &factory() {
     static std::vector<Factory> F;
@@ -287,6 +344,7 @@ static std::vector<Factory> &factory() {
         F.push_back({"LC 4 PAGES > CH 1-4", factory_pages(false)});
         F.push_back({"LC 4 PAGES > OUT A-D", factory_pages(true)});
         F.push_back({"EMPTY (LEARN)", "pg=0;"});
+        F.push_back({"LC > DRUMGEN (CH 15)", factory_drumgen()});
     }
     return F;
 }
@@ -777,6 +835,190 @@ static void web_label(Plugin *w, int slot, const std::string &name) {
     w->redisplay.store(true);
     LOG("[ccmap_vst] slot %d named '%s' (phone view)\n", slot + 1, name.c_str());
 }
+/* ---- BAUKASTEN (ccmap_kit.h): one library file for every project, next to the presets ---------- */
+static std::mutex g_kit_file_lock;
+static std::string kit_path() {
+    if (const char *env = std::getenv("CCMAP_KIT")) return env;
+    std::string bank;
+    { std::lock_guard<std::mutex> lk(g_bank_lock); bank = g_bank_path; }
+    const size_t cut = bank.rfind('/');
+    if (cut == std::string::npos) return "/tmp/ccmap_kit.txt";
+    return bank.substr(0, cut) + "/ccmap_kit.txt";
+}
+static void kit_load(Plugin *w) {
+    const std::string path = kit_path();
+    std::string t;
+    {
+        std::lock_guard<std::mutex> lk(g_kit_file_lock);
+        if (FILE *f = std::fopen(path.c_str(), "r")) {
+            char b[4096];
+            size_t n;
+            while ((n = std::fread(b, 1, sizeof b, f)) > 0 && t.size() < (1u << 20)) t.append(b, n);
+            std::fclose(f);
+        }
+    }
+    std::lock_guard<std::mutex> lk(w->mu);
+    if (!t.empty() && w->kit.from_text(t)) LOG("[ccmap_vst] kit %s: %d pages, %d elements\n", path.c_str(), (int)w->kit.pages.size(), w->kit.count());
+    else LOG("[ccmap_vst] kit %s: none yet\n", path.c_str());
+}
+/* whole file via a temp file (a power cut can't leave half a kit); never with w->mu held */
+static bool kit_write(const std::string &text) {
+    const std::string path = kit_path(), tmp = path + ".tmp";
+    std::lock_guard<std::mutex> lk(g_kit_file_lock);
+    FILE *f = std::fopen(tmp.c_str(), "w");
+    if (!f) { LOG("[ccmap_vst] kit: cannot write %s\n", tmp.c_str()); return false; }
+    std::fwrite(text.data(), 1, text.size(), f);
+    const bool ok = std::fclose(f) == 0 && std::rename(tmp.c_str(), path.c_str()) == 0;
+    if (!ok) LOG("[ccmap_vst] kit: cannot save %s\n", path.c_str());
+    return ok;
+}
+/*   GET /kit                              all pages with their elements (JSON)
+ *   GET /vals?p=P                         positions of page P (polled while playing)
+ *   GET /send?p=P&i=I&v=V[&v2=V2]         element I of page P to position V (XY: V2 = Y), 0..127
+ *   GET /page?op=add|set|del|move&p=P&name=N&cols=C&dir=-1|1
+ *   GET /el?op=put|del|move|dup&p=P&i=I (put with i=-1: new) &t=fader|knob|button|toggle|xy&n=Name
+ *           &c=colour&o=0..3&ch=1..16&cc=&cc2=&lo=&hi=&w=&h=&dir=-1|1
+ *   GET /import                           a new page from the CC Map slots of the active page
+ * Edits answer with the whole kit (like /kit) and are saved to the SD card at once. */
+/* whether the query has KEY= as a whole key (forcehub's Request::has() also matches "cc=" for "c") */
+static bool qhas(const forcehub::Request &r, const char *key) {
+    const std::string k = std::string(key) + "=";
+    for (size_t p = r.query.find(k); p != std::string::npos; p = r.query.find(k, p + 1))
+        if (p == 0 || r.query[p - 1] == '&') return true;
+    return false;
+}
+static int kit_route(Plugin *w, int c, const forcehub::Request &r) {
+    using namespace forcehub;
+    using cckit::El;
+    using cckit::Page;
+    const int p = r.num("p", -1), i = r.num("i", -1);
+    if (r.route == "/kit") { std::lock_guard<std::mutex> lk(w->mu); ok_json(c, w->kit.json()); return DONE; }
+    if (r.route == "/vals") { std::lock_guard<std::mutex> lk(w->mu); ok_json(c, w->kit.values(p)); return DONE; }
+    if (r.route == "/send") {
+        bool ok = false;
+        {
+            std::lock_guard<std::mutex> lk(w->mu);
+            cckit::Kit &k = w->kit;
+            if (p >= 0 && p < (int)k.pages.size() && i >= 0 && i < (int)k.pages[p].el.size() && qhas(r, "v")) {
+                El &e = k.pages[p].el[i];
+                cckit::Kit::send(e, r.num("v"), r.num("v2", -1), [w](int port, int st, int d1, int d2) { w->mp.emit(port, st, d1, d2); });
+                const std::string nm = e.name.empty() ? "KIT CC " + std::to_string(e.cc) : e.name;
+                if (e.type == cckit::T_XY) std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %d / %d", nm.c_str(), e.last, e.last2);
+                else std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %d", nm.c_str(), e.last);
+                w->mp.last_slot = -1;
+                w->mp.changed |= CH_LAST;
+                collect(w);
+                ok = true;
+            }
+        }
+        if (!ok) { bad(c, "no such element"); return DONE; }
+        wake(w);   /* the ALSA thread sends what was queued */
+        ok_json(c, "{\"ok\":true}");
+        return DONE;
+    }
+    if (r.route != "/page" && r.route != "/el" && r.route != "/import") return NOT_MINE;
+    const std::string op = r.arg("op");
+    const char *err = nullptr;
+    std::string text, json;
+    {
+        std::lock_guard<std::mutex> lk(w->mu);
+        cckit::Kit &k = w->kit;
+        const int np = (int)k.pages.size();
+        const bool page_ok = p >= 0 && p < np;
+        if (r.route == "/import") {
+            int skipped = 0;
+            Page pg = cckit::Kit::from_mapper(w->mp, skipped);
+            if (np >= cckit::MAXPAGES) err = "kit full (16 pages)";
+            else if (pg.el.empty()) err = "no CC slots on the active page";
+            else { k.pages.push_back(pg); LOG("[ccmap_vst] kit: page imported from the map (%d elements, %d skipped)\n", (int)pg.el.size(), skipped); }
+        } else if (r.route == "/page") {
+            if (op == "add") {
+                if (np >= cckit::MAXPAGES) err = "kit full (16 pages)";
+                else {
+                    Page pg;
+                    pg.name = qhas(r, "name") ? r.arg("name") : "Seite " + std::to_string(np + 1);
+                    if (qhas(r, "cols")) pg.cols = r.num("cols");
+                    k.pages.push_back(pg);
+                }
+            } else if (!page_ok) err = "no such page";
+            else if (op == "set") {
+                if (qhas(r, "name")) k.pages[p].name = r.arg("name");
+                if (qhas(r, "cols")) k.pages[p].cols = r.num("cols");
+            } else if (op == "del") k.pages.erase(k.pages.begin() + p);
+            else if (op == "move") {
+                const int q = p + (r.num("dir") < 0 ? -1 : 1);
+                if (q >= 0 && q < np) std::swap(k.pages[p], k.pages[q]);
+            } else err = "op: add, set, del, move";
+        } else {   /* /el */
+            if (!page_ok) err = "no such page";
+            else {
+                std::vector<El> &el = k.pages[p].el;
+                const bool el_ok = i >= 0 && i < (int)el.size();
+                if (op == "put") {
+                    if (!el_ok && i != -1) err = "no such element";
+                    else if (!el_ok && (int)el.size() >= cckit::MAXEL) err = "page full (48 elements)";
+                    else {
+                        El e = el_ok ? el[i] : El();
+                        if (qhas(r, "t")) { const std::string t = r.arg("t"); for (int x = 0; x < cckit::NTYPES; x++) if (t == cckit::type_key(x)) e.type = x; }
+                        if (qhas(r, "n")) e.name = r.arg("n");
+                        if (qhas(r, "c")) e.color = r.num("c");
+                        if (qhas(r, "o")) e.out = r.num("o");
+                        if (qhas(r, "ch")) e.ch = r.num("ch") - 1;
+                        if (qhas(r, "cc")) e.cc = r.num("cc");
+                        if (qhas(r, "cc2")) e.cc2 = r.num("cc2");
+                        if (qhas(r, "lo")) e.lo = r.num("lo");
+                        if (qhas(r, "hi")) e.hi = r.num("hi");
+                        if (qhas(r, "w")) e.w = r.num("w");
+                        if (qhas(r, "h")) e.h = r.num("h");
+                        k.sanitize(e);
+                        e.last = e.last2 = -1;   /* a changed target gets the next move in any case */
+                        if (el_ok) el[i] = e; else el.push_back(e);
+                    }
+                } else if (!el_ok) err = "no such element";
+                else if (op == "del") el.erase(el.begin() + i);
+                else if (op == "dup") {
+                    if ((int)el.size() >= cckit::MAXEL) err = "page full (48 elements)";
+                    else { El e = el[i]; e.last = e.last2 = -1; el.insert(el.begin() + i + 1, e); }
+                } else if (op == "move") {
+                    const int q = i + (r.num("dir") < 0 ? -1 : 1);
+                    if (q >= 0 && q < (int)el.size()) std::swap(el[i], el[q]);
+                } else err = "op: put, del, move, dup";
+            }
+        }
+        if (!err) {
+            for (Page &pg : k.pages) k.sanitize(pg);
+            k.rev++;
+            text = k.to_text();
+            json = k.json();
+        }
+    }
+    if (err) { bad(c, err); return DONE; }
+    kit_write(text);
+    ok_json(c, json);
+    return DONE;
+}
+static void kit_web_stop(Plugin *w) {
+    if (w->kitweb) { w->kitweb->stop(); delete w->kitweb; w->kitweb = nullptr; }
+}
+/* after CC Map's own server, so CC Map keeps the first port */
+static void kit_web_start(Plugin *w) {
+    if (w->kitweb) return;
+    w->kitweb = new forcehub::Server();
+    w->kitweb->id = "ccmap-kit";
+    w->kitweb->name = "Baukasten";
+    w->kitweb->color = "#4fc3a1";
+    w->kitweb->app = CCMAP_KIT_PAGE;
+    w->kitweb->summary = [w] {
+        std::lock_guard<std::mutex> lk(w->mu);
+        const int np = (int)w->kit.pages.size(), ne = w->kit.count();
+        if (!np) return std::string("Eigene Regler bauen");
+        return std::to_string(np) + (np == 1 ? " Seite · " : " Seiten · ") + std::to_string(ne) + (ne == 1 ? " Element" : " Elemente");
+    };
+    w->kitweb->route = [w](int c, const forcehub::Request &r) { return kit_route(w, c, r); };
+    if (!w->kitweb->start()) { LOG("[ccmap_vst] kit: no free port\n"); delete w->kitweb; w->kitweb = nullptr; }
+    else LOG("[ccmap_vst] kit on http://%s\n", w->kitweb->address().c_str());
+}
+
 /* start or stop the phone view to match the WEB VIEW setting; never call with w->mu held */
 static void web_apply(Plugin *w) {
     if (!w->owner) return;
@@ -809,7 +1051,9 @@ static void web_apply(Plugin *w) {
         w->web->route = [w, sv](int c, const forcehub::Request &r) { return ccweb::route(*sv, w->hooks, c, r); };
         if (!w->web->start()) { LOG("[ccmap_vst] phone view: no free port %d..%d\n", forcehub::Server::base_port(), forcehub::Server::base_port() + 9); delete w->web; w->web = nullptr; }
         else LOG("[ccmap_vst] phone view on http://%s (hub HUB_VERSION %d)\n", w->web->address().c_str(), HUB_VERSION);
+        if (w->web) kit_web_start(w);
     } else if (!want && w->web) {
+        kit_web_stop(w);
         w->web->stop(); delete w->web; w->web = nullptr;
         LOG("[ccmap_vst] phone view off\n");
     }
@@ -1029,6 +1273,7 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     switch (op) {
     case effOpen: return 1;
     case effClose: {
+        kit_web_stop(w);
         if (w->web) { w->web->stop(); delete w->web; w->web = nullptr; }
         alsa_close(w);
         Plugin *me = w;
@@ -1097,7 +1342,7 @@ extern "C" __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMa
     w->mp.changed = 0;
     Plugin *none = nullptr;
     w->owner = g_owner.compare_exchange_strong(none, w);
-    if (w->owner) { alsa_open(w); web_apply(w); }
+    if (w->owner) { kit_load(w); alsa_open(w); web_apply(w); }
     else LOG("[ccmap_vst] another CC Map instance already runs: this one stays passive\n");
 
     AEffect *e = &w->fx;

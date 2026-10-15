@@ -156,6 +156,11 @@ int main(int argc, char **argv) {
     if (fd >= 0) close(fd);
     unlink(bank);
     setenv("CCMAP_PRESETS", bank, 1);
+    char kitf[] = "/tmp/ccmap_test_kit_XXXXXX";
+    fd = mkstemp(kitf);
+    if (fd >= 0) close(fd);
+    unlink(kitf);
+    setenv("CCMAP_KIT", kitf, 1);
     if (!std::getenv("FORCEHUB_PORT")) setenv("FORCEHUB_PORT", "18080", 1);
     void *lib = dlopen(argv[1], RTLD_NOW);
     if (!lib) { std::printf("FAIL: dlopen %s\n", dlerror()); return 1; }
@@ -414,6 +419,46 @@ int main(int argc, char **argv) {
     CHECK(is(o, 3, 0x90, 12, 127), "4 pages > out A-D: page 4 pad 4 = Out D: %s", dump(o).c_str());
     t_in(e, DEV_LC, 0x80, 12, 0);
     take(e);
+    /* DrumGen on channel 15 */
+    e->dispatcher(e, 29, 4, 0, nm, 0);
+    CHECK(!std::strcmp(nm, "LC > DRUMGEN (CH 15)"), "factory preset 5: '%s'", nm);
+    e->dispatcher(e, 2, 0, 4, nullptr, 0);
+    take(e);
+    CHECK(display(e, "Link A") == "CONTROL IN", "DrumGen map links Out A");
+    set(e, "Active Page", 0);
+    t_in(e, DEV_LC, 0xB0, 21, 90);            /* page 1 knob 1 = lane 1 density (CC 13 ch 15) */
+    o = take(e);
+    CHECK(is(o, 0, 0xBE, 13, 90), "DrumGen page 1 knob 1 -> L1 density: %s", dump(o).c_str());
+    t_in(e, DEV_LC, 0xB0, 48, 10);            /* knob 16 = lane 8 pattern (CC 82) */
+    o = take(e);
+    CHECK(is(o, 0, 0xBE, 82, 10), "DrumGen knob 16 -> L8 pattern: %s", dump(o).c_str());
+    t_in(e, DEV_LC, 0x90, 10, 127);           /* pad 2 = lane 2 on (toggle) */
+    o = take(e);
+    CHECK(is(o, 0, 0xBE, 20, 127), "DrumGen pad 2 -> L2 on: %s", dump(o).c_str());
+    t_in(e, DEV_LC, 0x80, 10, 0); take(e);
+    set(e, "Active Page", 1);
+    t_in(e, DEV_LC, 0x90, 9, 127);            /* page 2 pad 1 = dice lane 1 (momentary) */
+    o = take(e);
+    CHECK(is(o, 0, 0xBE, 18, 127), "DrumGen dice L1: %s", dump(o).c_str());
+    t_in(e, DEV_LC, 0x80, 9, 0);
+    o = take(e);
+    CHECK(is(o, 0, 0xBE, 18, 0), "DrumGen dice released: %s", dump(o).c_str());
+    set(e, "Active Page", 2);
+    t_in(e, DEV_LC, 0x90, 9, 127);            /* page 3 pad 1 = generate */
+    o = take(e);
+    CHECK(is(o, 0, 0xBE, 101, 127), "DrumGen generate: %s", dump(o).c_str());
+    t_in(e, DEV_LC, 0x80, 9, 0); take(e);
+    t_in(e, DEV_LC, 0xB0, 23, 64);            /* page 3 knob 3 = swing */
+    o = take(e);
+    CHECK(is(o, 0, 0xBE, 104, 64), "DrumGen swing: %s", dump(o).c_str());
+    set(e, "Active Page", 3);
+    t_in(e, DEV_LC, 0x90, 28, 127);           /* page 4 pad 8 = lock lane 8 */
+    o = take(e);
+    CHECK(is(o, 0, 0xBE, 87, 127), "DrumGen lock L8: %s", dump(o).c_str());
+    t_in(e, DEV_LC, 0x80, 28, 0); take(e);
+    e->dispatcher(e, 2, 0, 2, nullptr, 0);   /* back to "4 pages > Out A-D", page 4, for SAVE / LOAD */
+    take(e);
+    set(e, "Active Page", 3);
 
     set(e, "Preset", 10);
     CHECK(display(e, "Preset") == "10 (empty)", "preset 10 empty: '%s'", display(e, "Preset").c_str());
@@ -632,13 +677,14 @@ int main(int argc, char **argv) {
         CHECK(info.find("kein Launch Control") != std::string::npos, "info: summary");
         /* a second instance takes the next port; its hub sees the same page */
         AEffect *e2 = open_plugin(lib);
-        CHECK(http_get("/info", hub_port() + 1).empty(), "second instance is no owner: no second server");
+        CHECK(http_get("/info", hub_port() + 1).find("\"name\":\"Baukasten\"") != std::string::npos, "0.8.0: the kit is the second tile");
+        CHECK(http_get("/info", hub_port() + 2).empty(), "second instance is no owner: no further server");
         e2->dispatcher(e2, 1, 0, 0, nullptr, 0);
         /* another plugin with a hub (here: one in the test itself) takes the next free port */
         forcehub::Server other;
         other.id = "matrix"; other.name = "Matrix"; other.app = "<title>M</title>";
         other.summary = [] { return std::string("A1 · PLAY"); };
-        CHECK(other.start() && other.port == hub_port() + 1, "second plugin on the next port (%d)", other.port);
+        CHECK(other.start() && other.port == hub_port() + 2, "another plugin on the next free port (%d)", other.port);
         CHECK(http_get("/info", other.port).find("\"name\":\"Matrix\"") != std::string::npos, "second plugin's info");
         CHECK(http_get("/app", other.port) == "<title>M</title>", "second plugin's app");
         CHECK(http_get("/state", other.port).find("not found") != std::string::npos, "routes stay with their plugin");
@@ -733,6 +779,93 @@ int main(int argc, char **argv) {
         CHECK(http_get("/files").find("off") != std::string::npos, "files off again");
         e->dispatcher(e, 1, 0, 0, nullptr, 0);
         unsetenv("CCMAP_STEMS");
+    }
+
+    /* ---- 0.8.0: BAUKASTEN ---- */
+    {
+        e = open_plugin(lib);
+        const int kp = hub_port() + 1;
+        auto kget = [&](const std::string &path) { return http_get(path.c_str(), kp); };
+        CHECK(kget("/app").find("<title>Baukasten</title>") != std::string::npos, "kit page served");
+        CHECK(kget("/info").find("Eigene Regler bauen") != std::string::npos, "empty kit summary: %s", kget("/info").c_str());
+        CHECK(kget("/kit").find("\"pages\":[]") != std::string::npos, "no pages yet");
+        CHECK(kget("/el?op=put&p=0&i=-1&t=fader").find("no such page") != std::string::npos, "element without page refused");
+        std::string j = kget("/page?op=add&name=Clem%20XT&cols=4");
+        CHECK(j.find("\"name\":\"Clem XT\"") != std::string::npos, "page added: %s", j.c_str());
+        j = kget("/el?op=put&p=0&i=-1&t=fader&n=Cutoff&c=2&o=2&ch=5&cc=74&lo=0&hi=127&w=1&h=3");
+        CHECK(j.find("\"n\":\"Cutoff\"") != std::string::npos && j.find("\"ch\":5") != std::string::npos, "fader added: %s", j.c_str());
+        kget("/el?op=put&p=0&i=-1&t=button&n=Fill&o=0&ch=16&cc=20&lo=0&hi=100");
+        kget("/el?op=put&p=0&i=-1&t=xy&n=Filter%20XY&o=1&ch=1&cc=71&cc2=74&lo=127&hi=0");
+        take(e);
+        CHECK(kget("/send?p=0&i=0&v=127").find("ok") != std::string::npos, "send ok");
+        o = take(e);
+        CHECK(is(o, 2, 0xB4, 74, 127), "fader -> Out C ch 5 CC 74 = 127: %s", dump(o).c_str());
+        kget("/send?p=0&i=0&v=127");
+        CHECK(take(e).empty(), "same fader value not sent twice");
+        CHECK(display(e, "Last") == "Cutoff = 127", "Force shows the kit move: '%s'", display(e, "Last").c_str());
+        kget("/send?p=0&i=1&v=127"); kget("/send?p=0&i=1&v=0"); kget("/send?p=0&i=1&v=0");
+        o = take(e);
+        CHECK(o.size() == 3 && o[0].port == 0 && o[0].st == 0xBF && o[0].d1 == 20 && o[0].d2 == 100 && o[1].d2 == 0 && o[2].d2 == 0,
+              "button: MAX on press, MIN on release, always sent: %s", dump(o).c_str());
+        kget("/send?p=0&i=2&v=0&v2=127");
+        o = take(e);
+        CHECK(o.size() == 2 && o[0].port == 1 && o[0].st == 0xB0 && o[0].d1 == 71 && o[0].d2 == 127 && o[1].d1 == 74 && o[1].d2 == 0,
+              "xy inverted, two CCs on Out B: %s", dump(o).c_str());
+        CHECK(kget("/vals?p=0").find("[127,-1],[0,-1],[0,127]") != std::string::npos, "values: %s", kget("/vals?p=0").c_str());
+        CHECK(kget("/send?p=0&i=9&v=1").find("no such") != std::string::npos, "send to a missing element refused");
+        /* edits: retarget, clamp, move, duplicate, delete */
+        j = kget("/el?op=put&p=0&i=0&ch=99&cc=300&w=0&n=" + std::string(40, 'x'));
+        CHECK(j.find("\"ch\":16") != std::string::npos && j.find("\"cc\":127") != std::string::npos && j.find("\"w\":1") != std::string::npos &&
+              j.find(std::string(24, 'x') + "\"") != std::string::npos && j.find(std::string(25, 'x')) == std::string::npos, "values clamped: %s", j.c_str());
+        kget("/el?op=put&p=0&i=0&n=Cutoff&ch=5&cc=74");
+        kget("/send?p=0&i=0&v=127");
+        CHECK(is(take(e), 2, 0xB4, 74, 127), "a retargeted element sends its next move again");
+        j = kget("/el?op=move&p=0&i=2&dir=-1");
+        CHECK(j.find("Filter XY") < j.find("\"Fill\""), "moved forward");
+        kget("/el?op=dup&p=0&i=0");
+        kget("/el?op=del&p=0&i=3");
+        j = kget("/kit");
+        CHECK(j.find("Cutoff") != j.rfind("Cutoff") && j.find("Filter XY") != std::string::npos && j.find("\"Fill\"") == std::string::npos, "dup + del: %s", j.c_str());
+        CHECK(kget("/el?op=nope&p=0&i=0").find("op:") != std::string::npos, "unknown op refused");
+        /* umlauts and separators in names, a second page, page order */
+        kget("/page?op=add&name=Gr%C3%BC%C3%9Fe%09%0Atab&cols=12");
+        j = kget("/kit");
+        CHECK(j.find("\"name\":\"Gr\xC3\xBC\xC3\x9F" "etab\",\"cols\":8") != std::string::npos, "page name cleaned, cols clamped: %s", j.c_str());
+        kget("/page?op=move&p=1&dir=-1");
+        j = kget("/kit");
+        CHECK(j.find("Gr\xC3\xBC") < j.find("Clem XT"), "page moved to the front");
+        CHECK(kget("/info").find("2 Seiten") != std::string::npos, "kit summary: %s", kget("/info").c_str());
+        /* the file: written on edits, read by the next owner */
+        std::string txt;
+        if (FILE *f = std::fopen(kitf, "r")) { char b[4096]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) txt.append(b, n); std::fclose(f); }
+        CHECK(txt.compare(0, 7, "CCKIT1\n") == 0 && txt.find("E\tfader\tCutoff\t2\t2\t5\t74\t") != std::string::npos, "kit file: %s", txt.c_str());
+        /* import from the map: knob (CC), pad (TOGGLE), a NOTE slot is skipped */
+        set(e, "Slot", 1); press(e, "Learn"); t_in(e, DEV_LC, 0xB0, 21, 40); set(e, "Number", 74); set(e, "Channel", 3);
+        http_get("/label?slot=1&name=Res");
+        set(e, "Slot", 2); press(e, "Learn"); t_in(e, DEV_LC, 0x90, 9, 127); t_in(e, DEV_LC, 0x80, 9, 0); set(e, "Button", 1);
+        set(e, "Type", 1); set(e, "Number", 30);
+        set(e, "Slot", 3); press(e, "Learn"); t_in(e, DEV_LC, 0x90, 10, 127); t_in(e, DEV_LC, 0x80, 10, 0);   /* NOTE target */
+        take(e);
+        j = kget("/import");
+        CHECK(j.find("CC Map S1") != std::string::npos && j.find("{\"t\":\"knob\",\"c\":2,\"o\":0,\"ch\":3,\"cc\":74") != std::string::npos &&
+              j.find("\"t\":\"toggle\"") != std::string::npos && j.find("\"n\":\"Res\"") != std::string::npos, "imported: %s", j.c_str());
+        CHECK(j.find("LC U1 PAD 2") == std::string::npos, "NOTE slot not imported");
+        e->dispatcher(e, 1, 0, 0, nullptr, 0);
+        e = open_plugin(lib);
+        j = http_get("/kit", kp);
+        CHECK(j.find("Cutoff") != std::string::npos && j.find("CC Map S1") != std::string::npos && j.find("\"v\":-1") != std::string::npos,
+              "kit restored from the file, values unknown: %s", j.c_str());
+        CHECK(kget("/page?op=del&p=9").find("no such page") != std::string::npos, "delete missing page refused");
+        for (int k = 0; k < 20; k++) kget("/page?op=add");
+        CHECK(kget("/page?op=add").find("16 pages") != std::string::npos, "at most 16 pages");
+        for (int k = 0; k < 50; k++) kget("/el?op=put&p=5&i=-1&t=knob");
+        CHECK(kget("/el?op=dup&p=5&i=0").find("48 elements") != std::string::npos, "at most 48 elements");
+        set(e, "Web View", 0);
+        CHECK(kget("/kit").empty(), "kit server stops with the phone view");
+        set(e, "Web View", 1);
+        CHECK(kget("/kit").find("CC Map S1") != std::string::npos, "and comes back");
+        e->dispatcher(e, 1, 0, 0, nullptr, 0);
+        unlink(kitf);
     }
 
     /* ---- stress: random parameters and MIDI ---- */

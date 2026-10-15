@@ -6,13 +6,15 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.7.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.8.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
 0.5.0: Handy-Ansicht im WLAN der Force, Namen für Slots (läuft auf Handy und iPad).
 0.6.0: Regler und Pads auf dem Handy bedienbar, Stems-Download aus dem Ordner `Stems`.
 0.7.0: gemeinsamer Hub mit den anderen Force-Plugins (z. B. Matrix): eine Adresse, eine Kachel pro Plugin.
+0.7.1: Werk-Preset „LC > DRUMGEN (CH 15)“ für DrumGen / DrumGen FX.
+0.8.0: **Baukasten** – eigene Seiten mit Fadern, Drehreglern, Tastern, Schaltern und XY-Pads auf dem Handy/iPad bauen, jede mit eigener CC, eigenem Kanal und Ausgang (eigene Kachel im Hub).
 Projekte und Presets älterer Versionen laden weiter.
 
 ## Warum ein Insert-Effekt
@@ -129,6 +131,7 @@ Presets pro Plugin gehen genauso, dann aber immer nur eins zur Zeit.
 | 2 | **LC 4 PAGES > CH 1-4**: 16 Regler und 8 Pads unverändert, Seite 1–4 = Kanal 1–4 auf Out A |
 | 3 | **LC 4 PAGES > OUT A-D**: wie 2, aber Seite 1–4 = Out A–D, Kanal 1 (vier Synth-Spuren, je ein Port) |
 | 4 | **EMPTY (LEARN)**: leere Belegung |
+| 5 | **LC > DRUMGEN (CH 15)**: DrumGen oder DrumGen FX, LINK A an. **In DrumGen CONTROL CH auf 15 stellen** (ab Werk 16, den nutzt schon das Euclidier-Preset mit denselben CC-Nummern). Seite 1 PLAY: oben Density, unten Pattern der Lanes 1–8, Pads = Lane an/aus. Seite 2 LANES: oben Length, unten Note, Pads = Dice (neu würfeln). Seite 3 GLOBAL: oben Style, Random, Swing, Gate, Auto, Remix Type, Remix Every, Echo Time; unten Echo Repeats, Echo Prob, Echo Falloff, Glitch Repeats, Glitch Gate, Glitch Prob, Glitch Random, Preset; Pads = Generate, Variate, Remix an/aus, Echo an/aus, Glitch an/aus, Load Preset. Seite 4: Pads = Lock der Lanes 1–8, Regler frei zum Lernen |
 
 ## Launch Control (MK1)
 
@@ -198,7 +201,7 @@ den neuen Wert danach per Pickup wieder abholen (LAST zeigt `… : TO 100`).
 
 **Namen vergeben:** Auf dem Handy den Namen unter einem Regler antippen, Namen eintippen, „Speichern". Der Name
 erscheint auch auf der Force (SLOT-Anzeige und LAST, z. B. `Clem Cutoff = 87`) und wird mit Projekt und
-Preset gespeichert. Das Werk-Preset „LC > EUCLIDIER FX" bringt seine Namen schon mit.
+Preset gespeichert. Die Werk-Presets „LC > EUCLIDIER FX" und „LC > DRUMGEN (CH 15)" bringen ihre Namen schon mit.
 
 Hinweise:
 - **Stems herunterladen (Tab „Stems" auf der Seite):** Lege auf der SD-Karte (oberste Ebene) einen
@@ -212,6 +215,46 @@ Hinweise:
 - Steht dort `NO NETWORK`, ist die Force nicht im WLAN; die Adresse erscheint, sobald sie verbunden ist.
 - Lässt sich die Seite nicht öffnen, obwohl eine Adresse angezeigt wird, blockiert vermutlich die Force
   den Port; dann bitte `/tmp/ccmap_vst.log` schicken.
+
+## Baukasten (Hub-Kachel „Baukasten")
+
+Im Hub erscheint neben CC Map eine zweite Kachel **Baukasten**. Dort stellst du dir eigene Bedienseiten
+zusammen – unabhängig von Hardware-Controllern. Jedes Element sendet **seine eigene CC auf seinem eigenen
+Kanal** über einen der Ausgänge **Out A–D** von CC Map (mit LINK A also auch direkt an alle „Control In“-Ports).
+
+| Element | Spielen |
+|---|---|
+| Fader | Position antippen oder ziehen (Wert = Fingerposition) |
+| Drehregler | auf- und abwischen (relativ, springt nicht; ganze Strecke ≈ 200 Pixel) |
+| Taster | gedrückt = MAX, losgelassen = MIN |
+| Schalter | jeder Tipp schaltet zwischen MIN und MAX |
+| XY-Pad | im Feld ziehen: X sendet CC, Y sendet CC Y |
+
+**Bauen:** Oben „Bearbeiten“ tippen. „+ Seite“ legt eine Seite an (Handy 4 Spalten, iPad 8), „+ Element“
+fügt ein Element hinzu, ein Element antippen öffnet seine Einstellungen: Typ, Name, Farbe, Ausgang A–D,
+Kanal 1–16, CC (beim XY-Pad zwei), Min/Max (Min größer als Max dreht um), Breite und Höhe im Raster.
+Dort auch: früher/später einsortieren, duplizieren, löschen. Die Zeile unten im Editor sagt in Klartext,
+was das Element sendet, und warnt, wenn dieselbe CC auf demselben Kanal schon auf der Seite liegt.
+„Seite einstellen“ ändert Name und Spaltenzahl, verschiebt oder löscht die Seite. „Fertig“ schaltet zurück
+zum Spielen.
+
+**Aus CC Map übernehmen:** macht aus allen CC-Slots der aktiven CC-Map-Seite eine fertige Baukasten-Seite
+(Namen, Kanal, CC, Min/Max übernommen; Pads werden Taster bzw. Schalter, Launch-Control-/EC4-/E16-Regler
+Drehregler, alles andere Fader). NOTE-, PROGRAM- und PAGE-Slots werden übersprungen.
+
+- Gespeichert wird bei jeder Änderung in **`ccmap_kit.txt`** neben `ccmap_presets.txt` – der Baukasten gilt
+  für alle Projekte. Höchstens 16 Seiten mit je 48 Elementen.
+- Die Stellungen merkt sich nur das laufende Plugin: Nach einem Neustart zeigen die Elemente „–“, bis sie
+  bewegt werden. Ein Drehregler ohne bekannte Stellung startet in der Mitte.
+- Mehrere Handys/iPads gleichzeitig gehen: Jedes sieht die Bewegungen und Änderungen der anderen nach
+  spätestens einer halben Sekunde.
+- Die Force zeigt die letzte Baukasten-Bewegung in LAST (z. B. `Cutoff = 87`).
+- Läuft, solange PHONE VIEW (Tab SYNC) eingeschaltet ist; mit PHONE VIEW OFF ist auch der Baukasten aus.
+  Wie die übrige Handy-Ansicht: jeder im selben WLAN kann ihn öffnen und ändern.
+- Port: der nächste freie nach CC Map (meist 8001). Weitere Hub-Plugins wie Matrix rücken einen Port weiter.
+
+Programmierschnittstelle (alles GET, Antwort JSON): `/kit`, `/vals?p=`, `/send?p=&i=&v=[&v2=]`,
+`/page?op=add|set|del|move`, `/el?op=put|del|move|dup`, `/import` – Einzelheiten in `ccmap_vst.cpp` bei `kit_route`.
 
 ## OXI E16
 
@@ -234,6 +277,7 @@ Hinweise:
 | `vst/ccmap_files.h` | Stems-Ordner: Liste, Download, gestreamtes ZIP |
 | `vst/forcehub.h` | gemeinsamer Hub aller Force-Plugins: HTTP-Server auf dem ersten freien Port 8000–8009, `/` Kachelseite, `/info`, `/app` (gleiche Datei in jedem Plugin-Repo) |
 | `vst/ccmap_web.h`, `vst/page/index.html` | Handy-Ansicht von CC Map auf dem Hub; `gen_page.py` bettet die Seite als `ccmap_page.h` ein |
+| `vst/ccmap_kit.h`, `vst/page/kit.html` | Baukasten: Seiten, Elemente, Speicherformat, Senden; die Seite wird als `ccmap_kit_page.h` eingebettet |
 | `vst/module.json`, `vst/vst.json`, `vst/layout.conf` | Parameter und Skin für `gen_vst.py` |
 | `vst/captions.py`, `vst/fonts/` | Beschriftungen in Titillium Web (aus mpc-vst-euclidier, SIL OFL) |
 | `vst/host_test.cpp`, `vst/test.sh` | Offline-Test über Test-Hooks statt ALSA |
