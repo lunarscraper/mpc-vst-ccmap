@@ -30,6 +30,7 @@
     {"key": "send", "name": "Send Values", "access": "write"},
     {"key": "template", "name": "LC Template", "min": 0, "max": 1},
     {"key": "web", "name": "Web View", "options": ["OFF", "ON"]},
-    {"key": "web_addr", "name": "Phone Address", "min": 0, "max": 1}
+    {"key": "web_addr", "name": "Phone Address", "min": 0, "max": 1},
+    {"key": "files", "name": "Files", "options": ["OFF", "ON"]}
   ]
 }

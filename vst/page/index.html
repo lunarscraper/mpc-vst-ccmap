@@ -26,6 +26,7 @@ header { position: sticky; top: 0; z-index: 3; background: var(--bg); padding: 1
 .chip.learn { color: #fff; background: #c0392b; border-color: #c0392b; }
 .last { font: 500 15px var(--mono); color: var(--hot); min-height: 20px; overflow-wrap: anywhere; }
 .off { color: var(--muted); }
+.home { color: var(--muted); text-decoration: none; font: 600 22px var(--sans); border: 1px solid var(--line); border-radius: 10px; width: 36px; height: 32px; display: inline-flex; align-items: center; justify-content: center; }
 h2 { font: 600 13px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 18px 0 8px; }
 .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 @media (min-width: 700px) { .grid { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
@@ -53,22 +54,46 @@ svg.arc { width: 46px; height: 46px; }
 .sheet button.save { background: var(--accent); color: #141414; }
 .status { position: fixed; right: 10px; bottom: calc(env(safe-area-inset-bottom, 0) + 8px); font: 11px var(--mono); color: var(--muted); }
 [hidden] { display: none !important; }
+nav.tabs { display: flex; gap: 6px; }
+nav.tabs button { font: 700 14px var(--sans); padding: 6px 14px; border-radius: 99px; border: 1px solid var(--line); background: none; color: var(--muted); }
+nav.tabs button[aria-pressed="true"] { background: var(--accent); color: #141414; border-color: var(--accent); }
+svg.arc { touch-action: none; cursor: ns-resize; }
+.ctl .name { cursor: text; border-bottom: 1px dashed transparent; }
+.ctl:not(.empty) .name:hover { border-bottom-color: var(--muted); }
+.pad { touch-action: none; }
+.ctl.drag { border-color: var(--accent); }
+.crumbs { font: 500 13px var(--mono); color: var(--muted); overflow-wrap: anywhere; margin: 12px 0; }
+.frow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--fg); text-decoration: none; }
+.frow .fn { font: 600 15px var(--sans); overflow-wrap: anywhere; }
+.frow .fm { font: 12px var(--mono); color: var(--muted); }
+.frow .dl { font: 700 13px var(--sans); color: var(--accent); }
+.zipbtn { display: inline-block; font: 700 15px var(--sans); background: var(--accent); color: #141414; padding: 10px 16px; border-radius: 8px; text-decoration: none; margin: 4px 0 12px; }
+.note { color: var(--muted); font-size: 14px; line-height: 1.5; }
 </style>
 </head>
 <body>
 <header>
-  <div class="row"><span class="tmpl"><span class="dot"></span><span id="tmpl">Launch Control</span></span>
+  <div class="row"><a class="home" href="/" aria-label="Alle Plugins">&#8962;</a><span class="tmpl"><span class="dot"></span><span id="tmpl">Launch Control</span></span>
     <span class="chip" id="page">Seite 1</span><span class="chip learn" id="learn" hidden>Learn</span></div>
+  <nav class="tabs"><button type="button" id="t-ctl" aria-pressed="true">Regler</button><button type="button" id="t-files" aria-pressed="false">Stems</button></nav>
   <div class="last" id="last">–</div>
 </header>
 
+<main id="v-ctl">
 <h2>Launch Control · Regler</h2>
 <div class="grid" id="knobs"></div>
 <h2>Pads</h2>
 <div class="grid" id="pads"></div>
 <h2 id="oh" hidden>Weitere Controller</h2>
 <div class="list" id="others"></div>
-<p class="hint">Tippe einen Regler an, um ihm einen Namen zu geben. Die Namen speichert CC Map mit Projekt und Preset.</p>
+<p class="hint">Auf dem Bogen auf- und abwischen stellt den Wert ein, ein Pad antippen spielt es. Den Namen antippen benennt den Regler um; CC Map speichert die Namen mit Projekt und Preset.</p>
+</main>
+<main id="v-files" hidden>
+  <div class="crumbs" id="crumbs"></div>
+  <div id="zipwrap"></div>
+  <div class="list" id="flist"></div>
+  <p class="note" id="fnote"></p>
+</main>
 
 <div class="sheet" id="sheet" hidden>
   <div id="sh-title" style="font:600 14px var(--sans); color: var(--muted)"></div>
@@ -97,15 +122,16 @@ function arc(val) {
     '<text x="23" y="27" text-anchor="middle" font-size="11" font-family="monospace" fill="#ecE9e2">' + (val < 0 ? "–" : val) + "</text></svg>";
 }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-let st = null, editing = -1;
+let st = null, editing = -1, drag = null, view = "ctl";
 
 function ctlHtml(k, i, isPad) {
   const label = k.slot < 0 ? "frei" : (k.label || (isPad ? "Pad " + (i + 1) : "Regler " + (i + 1)));
   const hot = st && k.slot >= 0 && k.slot === st.last_slot;
-  const visual = isPad ? '<div class="pad" style="background:' + (ledColour(k.led) || "#2c2e33") + '"></div>' : arc(k.val);
-  return '<button type="button" class="ctl' + (k.slot < 0 ? " empty" : "") + (hot ? " hot" : "") + '" data-slot="' + k.slot + '" data-what="' +
-    esc((isPad ? "Pad " : "Regler ") + (i + 1)) + '"><span class="nr">' + (isPad ? "P" : "K") + (i + 1) + "</span>" + visual +
-    '<span class="name">' + esc(label) + '</span><span class="tgt">' + esc(k.slot < 0 ? "" : k.target) + "</span></button>";
+  const visual = isPad ? '<div class="pad" data-pad="' + k.slot + '" style="background:' + (ledColour(k.led) || "#2c2e33") + '"></div>'
+                       : '<span data-knob="' + k.slot + '" data-val="' + k.val + '">' + arc(k.val) + "</span>";
+  return '<div class="ctl' + (k.slot < 0 ? " empty" : "") + (hot ? " hot" : "") + '"><span class="nr">' + (isPad ? "P" : "K") + (i + 1) + "</span>" + visual +
+    '<span class="name" data-slot="' + k.slot + '" data-what="' + esc((isPad ? "Pad " : "Regler ") + (i + 1)) + '" tabindex="0">' + esc(label) +
+    '</span><span class="tgt">' + esc(k.slot < 0 ? "" : k.target) + "</span></div>";
 }
 function render() {
   if (!st) return;
@@ -129,12 +155,12 @@ async function poll() {
     const r = await fetch("/state", { cache: "no-store" });
     st = await r.json();
     $("status").textContent = "";
-    if (editing < 0) render();
+    if (editing < 0 && !drag && view === "ctl") render();
   } catch (e) { $("status").textContent = "keine Verbindung zur Force"; }
   setTimeout(poll, 250);
 }
 document.addEventListener("click", (ev) => {
-  const b = ev.target.closest("[data-slot]");
+  const b = ev.target.closest(".name[data-slot], .item[data-slot]");
   if (!b || +b.dataset.slot < 0) return;
   editing = +b.dataset.slot;
   const cur = (st.knobs.concat(st.pads, st.others).find((x) => x.slot === editing) || {}).label || "";
@@ -153,6 +179,96 @@ $("sh-save").addEventListener("click", () => save($("sh-name").value.trim()));
 $("sh-clear").addEventListener("click", () => save(""));
 $("sh-cancel").addEventListener("click", close_);
 $("sh-name").addEventListener("keydown", (e) => { if (e.key === "Enter") save($("sh-name").value.trim()); if (e.key === "Escape") close_(); });
+/* ---- play from the phone: drag a knob's arc, press a pad ---- */
+let sendAt = 0, sendTimer = null;
+function sendVal(slot, v, now) {
+  const go = () => { sendTimer = null; sendAt = Date.now(); fetch("/set?slot=" + (slot + 1) + "&val=" + v).catch(() => {}); };
+  clearTimeout(sendTimer);
+  if (now || Date.now() - sendAt > 40) go(); else sendTimer = setTimeout(go, 40);
+}
+document.addEventListener("pointerdown", (ev) => {
+  const k = ev.target.closest("[data-knob]");
+  if (k && +k.dataset.knob >= 0) {
+    ev.preventDefault();
+    k.setPointerCapture(ev.pointerId);
+    const v0 = +k.dataset.val < 0 ? 64 : +k.dataset.val;
+    drag = { el: k, slot: +k.dataset.knob, y0: ev.clientY, v0, v: v0 };
+    k.closest(".ctl").classList.add("drag");
+    return;
+  }
+  const p = ev.target.closest("[data-pad]");
+  if (p && +p.dataset.pad >= 0) {
+    ev.preventDefault();
+    p.setPointerCapture(ev.pointerId);
+    drag = { pad: +p.dataset.pad, el: p };
+    p.style.outline = "3px solid var(--hot)";
+    fetch("/press?slot=" + (+p.dataset.pad + 1) + "&down=1").catch(() => {});
+  }
+});
+document.addEventListener("pointermove", (ev) => {
+  if (!drag || drag.pad !== undefined) return;
+  const v = Math.max(0, Math.min(127, Math.round(drag.v0 + (drag.y0 - ev.clientY) * 127 / 220)));   /* 220 px = full range */
+  if (v === drag.v) return;
+  drag.v = v;
+  drag.el.innerHTML = arc(v);
+  sendVal(drag.slot, v, false);
+});
+function endDrag() {
+  if (!drag) return;
+  if (drag.pad !== undefined) { fetch("/press?slot=" + (drag.pad + 1) + "&down=0").catch(() => {}); drag.el.style.outline = ""; }
+  else { if (drag.v !== drag.v0) sendVal(drag.slot, drag.v, true); drag.el.closest(".ctl").classList.remove("drag"); }
+  drag = null;
+}
+document.addEventListener("pointerup", endDrag);
+document.addEventListener("pointercancel", endDrag);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.classList && e.target.classList.contains("name")) e.target.click();
+});
+
+/* ---- stems ---- */
+function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + " GB" : b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " kB"; }
+function fmtDate(t) { const d = new Date(t * 1000); return d.toLocaleDateString("de-DE") + " " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }); }
+async function openDir(dir) {
+  const note = $("fnote"), list = $("flist");
+  list.innerHTML = ""; $("zipwrap").innerHTML = ""; note.textContent = "Lade …";
+  let r, j;
+  try { r = await fetch("/files?dir=" + encodeURIComponent(dir || "")); j = await r.json(); }
+  catch (e) { note.textContent = "Keine Verbindung zur Force."; return; }
+  if (r.status === 403) { $("crumbs").textContent = ""; note.textContent = "Der Download ist ausgeschaltet. In CC Map im Tab SYNC „STEMS DOWNLOAD“ auf ON stellen."; return; }
+  if (!r.ok) { note.textContent = "Ordner nicht verfügbar."; return; }
+  note.textContent = "";
+  if (j.roots) {
+    $("crumbs").textContent = "Stems-Ordner";
+    if (!j.roots.length) { note.textContent = "Kein Ordner „Stems“ gefunden. Lege auf der SD-Karte (oberste Ebene) einen Ordner „Stems“ an und exportiere dorthin."; return; }
+    list.innerHTML = j.roots.map((p) => '<a class="frow" href="#" data-dir="' + esc(p) + '"><span class="fn">' + esc(p) + '</span><span class="dl">öffnen</span></a>').join("");
+    return;
+  }
+  $("crumbs").textContent = "Stems" + j.dir.slice(j.top.length);
+  const rows = [];
+  if (j.parent) rows.push('<a class="frow" href="#" data-dir="' + esc(j.parent) + '"><span class="fn">↑ zurück</span><span></span></a>');
+  for (const d of j.dirs) rows.push('<a class="frow" href="#" data-dir="' + esc(j.dir + "/" + d) + '"><span class="fn">▸ ' + esc(d) + '</span><span class="dl">öffnen</span></a>');
+  for (const f of j.files) rows.push('<a class="frow" href="/file?path=' + encodeURIComponent(j.dir + "/" + f.name) + '" download><span class="fn">' + esc(f.name) +
+    '</span><span class="dl">laden</span><span class="fm">' + fmtSize(f.size) + " · " + fmtDate(f.mtime) + "</span></a>");
+  list.innerHTML = rows.join("");
+  if (j.files.length) {
+    const total = j.files.reduce((a, f) => a + f.size, 0);
+    $("zipwrap").innerHTML = '<a class="zipbtn" href="/zip?dir=' + encodeURIComponent(j.dir) + '" download>Alle ' + j.files.length + " als ZIP laden (" + fmtSize(total) + ")</a>";
+  } else if (!j.dirs.length) note.textContent = "Dieser Ordner enthält noch keine Audiodateien.";
+}
+document.addEventListener("click", (ev) => {
+  const d = ev.target.closest("[data-dir]");
+  if (!d) return;
+  ev.preventDefault();
+  openDir(d.dataset.dir);
+});
+function showView(v) {
+  view = v;
+  $("v-ctl").hidden = v !== "ctl"; $("v-files").hidden = v !== "files";
+  $("t-ctl").setAttribute("aria-pressed", v === "ctl"); $("t-files").setAttribute("aria-pressed", v === "files");
+  if (v === "files") openDir(""); else render();
+}
+$("t-ctl").addEventListener("click", () => showView("ctl"));
+$("t-files").addEventListener("click", () => showView("files"));
 poll();
 </script>
 </body>

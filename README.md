@@ -6,11 +6,13 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.5.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.7.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
-0.5.0: Handy-Ansicht im WLAN der Force, Namen für Slots.
+0.5.0: Handy-Ansicht im WLAN der Force, Namen für Slots (läuft auf Handy und iPad).
+0.6.0: Regler und Pads auf dem Handy bedienbar, Stems-Download aus dem Ordner `Stems`.
+0.7.0: gemeinsamer Hub mit den anderen Force-Plugins (z. B. Matrix): eine Adresse, eine Kachel pro Plugin.
 Projekte und Presets älterer Versionen laden weiter.
 
 ## Warum ein Insert-Effekt
@@ -180,16 +182,33 @@ So öffnest du sie:
 1. Die Force ins WLAN bringen (Einstellungen der Force → WLAN).
 2. In CC Map den Tab **SYNC** öffnen: Unter „OPEN ON PHONE: HTTP://" steht die Adresse, z. B.
    `192.168.178.40:8000`.
-3. Das Handy ins selbe WLAN, im Browser `http://` und die Adresse eingeben. Tipp: als Lesezeichen
-   oder „Zum Home-Bildschirm" sichern.
+3. Das Handy ins selbe WLAN, im Browser `http://` und die Adresse eingeben. Es erscheint der **Hub**:
+   eine Kachel für jedes Plugin mit Handy-Ansicht, das gerade auf der Force läuft (CC Map, Matrix …).
+   Kachel antippen öffnet das Plugin, das Haus-Symbol oben links führt zurück. Tipp: den Hub als
+   Lesezeichen oder „Zum Home-Bildschirm" sichern – er gilt für alle Plugins.
 
-**Namen vergeben:** Auf dem Handy einen Regler antippen, Namen eintippen, „Speichern". Der Name
+**Hub und Ports:** Jedes Plugin nimmt den ersten freien Port von 8000 bis 8009 (wer zuerst lädt, bekommt
+8000). Jede dieser Adressen zeigt denselben Hub; welcher Port wem gehört, steht klein auf der Kachel.
+Es läuft kein zusätzlicher Dienst, jedes Plugin bringt seinen Teil selbst mit (`forcehub.h`).
+
+**Spielen vom Handy:** Auf dem Bogen eines Reglers auf- und abwischen stellt den Wert ein (die ganze
+Strecke ≈ 220 Pixel), ein Pad antippen drückt es (TOGGLE schaltet um). Das Ziel bekommt den Wert wie
+von der Hardware; EC4/E16 bekommen ihn zurückgemeldet, ein Poti der Launch Control / des UC-33 muss
+den neuen Wert danach per Pickup wieder abholen (LAST zeigt `… : TO 100`).
+
+**Namen vergeben:** Auf dem Handy den Namen unter einem Regler antippen, Namen eintippen, „Speichern". Der Name
 erscheint auch auf der Force (SLOT-Anzeige und LAST, z. B. `Clem Cutoff = 87`) und wird mit Projekt und
 Preset gespeichert. Das Werk-Preset „LC > EUCLIDIER FX" bringt seine Namen schon mit.
 
 Hinweise:
-- **PHONE VIEW** (Tab SYNC) schaltet die Seite ab. Jeder im selben WLAN kann sie öffnen und Namen
-  ändern, aber nichts anderes; im Heimnetz unkritisch, in fremden Netzen lieber abschalten.
+- **Stems herunterladen (Tab „Stems" auf der Seite):** Lege auf der SD-Karte (oberste Ebene) einen
+  Ordner `Stems` an und exportiere die Stems dorthin, gern mit einem Unterordner pro Song. Mit
+  **STEMS DOWNLOAD = ON** (Tab SYNC, Voreinstellung OFF) zeigt die Seite diesen Ordner: jede Datei
+  einzeln laden oder „Alle als ZIP laden" (ohne Kompression, bis 4 GB pro ZIP). Nur dieser Ordner,
+  nur Audio-/MIDI-Dateien, nur lesen. Downloads laufen mit niedrigster Priorität – trotzdem besser
+  nicht während des Live-Spiels.
+- **PHONE VIEW** (Tab SYNC) schaltet die Seite ab. Jeder im selben WLAN kann sie öffnen, Namen
+  ändern und die Regler bewegen (und mit STEMS DOWNLOAD die Stems laden); im Heimnetz unkritisch, in fremden Netzen lieber abschalten.
 - Steht dort `NO NETWORK`, ist die Force nicht im WLAN; die Adresse erscheint, sobald sie verbunden ist.
 - Lässt sich die Seite nicht öffnen, obwohl eine Adresse angezeigt wird, blockiert vermutlich die Force
   den Port; dann bitte `/tmp/ccmap_vst.log` schicken.
@@ -212,7 +231,9 @@ Hinweise:
 |---|---|
 | `vst/ccmap_core.h` | Mapping-Kern ohne VST und ALSA (Learn, Seiten, Ziele, LEDs, Zustand als Text) |
 | `vst/ccmap_vst.cpp` | VST2-Hülle (handgeschrieben), ALSA-Thread, Presets, Projekt-Chunk |
-| `vst/ccmap_web.h`, `vst/page/index.html` | Handy-Ansicht: kleiner HTTP-Server (Port 8000) und die Seite; `gen_page.py` bettet sie als `ccmap_page.h` ein |
+| `vst/ccmap_files.h` | Stems-Ordner: Liste, Download, gestreamtes ZIP |
+| `vst/forcehub.h` | gemeinsamer Hub aller Force-Plugins: HTTP-Server auf dem ersten freien Port 8000–8009, `/` Kachelseite, `/info`, `/app` (gleiche Datei in jedem Plugin-Repo) |
+| `vst/ccmap_web.h`, `vst/page/index.html` | Handy-Ansicht von CC Map auf dem Hub; `gen_page.py` bettet die Seite als `ccmap_page.h` ein |
 | `vst/module.json`, `vst/vst.json`, `vst/layout.conf` | Parameter und Skin für `gen_vst.py` |
 | `vst/captions.py`, `vst/fonts/` | Beschriftungen in Titillium Web (aus mpc-vst-euclidier, SIL OFL) |
 | `vst/host_test.cpp`, `vst/test.sh` | Offline-Test über Test-Hooks statt ALSA |

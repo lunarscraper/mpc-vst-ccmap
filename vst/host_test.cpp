@@ -16,9 +16,11 @@
 #include <vector>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include "forcehub.h"
 
 struct AEffect;
 typedef intptr_t (*audioMasterCallback)(AEffect *, int32_t, int32_t, intptr_t, void *, float);
@@ -96,7 +98,7 @@ static void set(AEffect *e, const char *name, double v) {
     if (s == "Slot") { lo = 1; hi = 128; }
     else if (s == "Page") hi = 4;
     else if (s == "Encoder" || s == "Feedback" || s == "LEDs") hi = 2;
-    else if (s == "Web View") hi = 1;
+    else if (s == "Web View" || s == "Files") hi = 1;
     else if (s == "Out" || s == "Active Page") hi = 3;
     else if (s == "Channel") { lo = 1; hi = 16; }
     else if (s == "Type") hi = 4;
@@ -112,12 +114,15 @@ static void block(AEffect *e) {
     e->processReplacing(e, in, out, 128);
 }
 
-/* the phone view: one GET against 127.0.0.1:CCMAP_WEB_PORT, body only ("" on failure) */
-static std::string http_get(const char *path) {
+/* the phone view: one GET against 127.0.0.1:FORCEHUB_PORT, body only ("" on failure) */
+static std::string http_full(const char *path_in, int port) {
+    std::string pe;   /* a path with spaces: percent-encode them like a browser */
+    for (const char *q = path_in; *q; q++) { if (*q == ' ') pe += "%20"; else pe += *q; }
+    const char *path = pe.c_str();
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
-    a.sin_port = htons((uint16_t)std::atoi(std::getenv("CCMAP_WEB_PORT")));
+    a.sin_port = htons((uint16_t)port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     std::string r;
     for (int t = 0; t < 20 && connect(fd, (sockaddr *)&a, sizeof a) < 0; t++) { usleep(50000); close(fd); fd = socket(AF_INET, SOCK_STREAM, 0); }
@@ -127,6 +132,11 @@ static std::string http_get(const char *path) {
     ssize_t n;
     while ((n = recv(fd, b, sizeof b, 0)) > 0) r.append(b, (size_t)n);
     close(fd);
+    return r;
+}
+static int hub_port() { return std::atoi(std::getenv("FORCEHUB_PORT")); }
+static std::string http_get(const char *path, int port = 0) {
+    const std::string r = http_full(path, port ? port : hub_port());
     size_t h = r.find("\r\n\r\n");
     return h == std::string::npos ? "" : r.substr(h + 4);
 }
@@ -146,7 +156,7 @@ int main(int argc, char **argv) {
     if (fd >= 0) close(fd);
     unlink(bank);
     setenv("CCMAP_PRESETS", bank, 1);
-    if (!std::getenv("CCMAP_WEB_PORT")) setenv("CCMAP_WEB_PORT", "18080", 1);
+    if (!std::getenv("FORCEHUB_PORT")) setenv("FORCEHUB_PORT", "18080", 1);
     void *lib = dlopen(argv[1], RTLD_NOW);
     if (!lib) { std::printf("FAIL: dlopen %s\n", dlerror()); return 1; }
     t_in = (in_fn)dlsym(lib, "ccmap_test_input");
@@ -611,8 +621,28 @@ int main(int argc, char **argv) {
     /* ---- 0.5.0: phone view, slot names ---- */
     e = open_plugin(lib);
     {
-        const std::string page = http_get("/");
-        CHECK(page.find("<title>CC Map</title>") != std::string::npos, "phone page served (%zu bytes)", page.size());
+        const std::string page = http_get("/app");
+        CHECK(page.find("<title>CC Map</title>") != std::string::npos, "phone page served at /app (%zu bytes)", page.size());
+        CHECK(http_get("/").find("<title>Force</title>") != std::string::npos, "hub page at /");
+        const std::string info = http_full("/info", hub_port());
+        CHECK(info.find("Access-Control-Allow-Origin: *") != std::string::npos, "info: CORS header");
+        CHECK(info.find("\"id\":\"ccmap\"") != std::string::npos && info.find("\"app\":\"/app\"") != std::string::npos, "info: %s", info.c_str());
+        char pp[32]; std::snprintf(pp, sizeof pp, "\"port\":%d", hub_port());
+        CHECK(info.find(pp) != std::string::npos, "info: on the first port of the range");
+        CHECK(info.find("kein Launch Control") != std::string::npos, "info: summary");
+        /* a second instance takes the next port; its hub sees the same page */
+        AEffect *e2 = open_plugin(lib);
+        CHECK(http_get("/info", hub_port() + 1).empty(), "second instance is no owner: no second server");
+        e2->dispatcher(e2, 1, 0, 0, nullptr, 0);
+        /* another plugin with a hub (here: one in the test itself) takes the next free port */
+        forcehub::Server other;
+        other.id = "matrix"; other.name = "Matrix"; other.app = "<title>M</title>";
+        other.summary = [] { return std::string("A1 · PLAY"); };
+        CHECK(other.start() && other.port == hub_port() + 1, "second plugin on the next port (%d)", other.port);
+        CHECK(http_get("/info", other.port).find("\"name\":\"Matrix\"") != std::string::npos, "second plugin's info");
+        CHECK(http_get("/app", other.port) == "<title>M</title>", "second plugin's app");
+        CHECK(http_get("/state", other.port).find("not found") != std::string::npos, "routes stay with their plugin");
+        other.stop();
         set(e, "Slot", 1); press(e, "Learn"); t_in(e, DEV_LC, 0xB0, 21, 30); set(e, "Number", 74); set(e, "Channel", 5);
         set(e, "Slot", 2); press(e, "Learn"); t_in(e, DEV_E16, 0xB0, 7, 99);
         take(e);
@@ -647,6 +677,62 @@ int main(int argc, char **argv) {
         CHECK(display(e, "Slot") == "2 A;b=c%", "name with separators restored: '%s'", display(e, "Slot").c_str());
         CHECK(http_get("/state").find("Clem Cutoff") != std::string::npos, "restored project serves its names");
         e->dispatcher(e, 1, 0, 0, nullptr, 0);
+    }
+
+    /* ---- 0.6.0: knobs and pads from the phone, stems download ---- */
+    {
+        char stems[] = "/tmp/ccmap_stems_XXXXXX";
+        CHECK(mkdtemp(stems) != nullptr, "temp stems dir");
+        setenv("CCMAP_STEMS", stems, 1);
+        const std::string song = std::string(stems) + "/Song 1";
+        mkdir(song.c_str(), 0755);
+        std::string wav1 = song + "/Kick.wav", wav2 = song + "/Bass.wav", txt = song + "/notes.txt";
+        std::string data1(100000, 'k'), data2 = "RIFF-bass";
+        for (size_t i = 0; i < data1.size(); i++) data1[i] = (char)(i * 7);
+        FILE *f = std::fopen(wav1.c_str(), "wb"); std::fwrite(data1.data(), 1, data1.size(), f); std::fclose(f);
+        f = std::fopen(wav2.c_str(), "wb"); std::fwrite(data2.data(), 1, data2.size(), f); std::fclose(f);
+        f = std::fopen(txt.c_str(), "wb"); std::fputs("secret", f); std::fclose(f);
+
+        e = open_plugin(lib);
+        set(e, "Slot", 1); press(e, "Learn"); t_in(e, DEV_E16, 0xB0, 20, 10); set(e, "Number", 74);
+        set(e, "Slot", 2); press(e, "Learn"); t_in(e, DEV_LC, 0x90, 9, 127); t_in(e, DEV_LC, 0x80, 9, 0); set(e, "Type", 1); set(e, "Number", 60); set(e, "Button", 1);
+        set(e, "Slot", 3); press(e, "Learn"); t_in(e, DEV_LC, 0xB0, 22, 10);
+        take(e);
+        CHECK(http_get("/set?slot=1&val=99").find("ok") != std::string::npos, "remote set");
+        o = take(e);
+        CHECK(o.size() == 2 && o[0].port == FB + DEV_E16 && o[0].d2 == 99 && o[1].port == 0 && o[1].d1 == 74 && o[1].d2 == 99,
+              "remote knob: E16 told + Out A CC 74 = 99: %s", dump(o).c_str());
+        http_get("/press?slot=2&down=1"); http_get("/press?slot=2&down=0");
+        o = take(e);
+        CHECK(is(o, 0, 0xB0, 60, 127), "remote pad toggles on: %s", dump(o).c_str());
+        CHECK(http_get("/set?slot=50&val=1").find("no such") != std::string::npos, "remote: empty slot refused");
+        http_get("/set?slot=3&val=100");
+        take(e);
+        t_in(e, DEV_LC, 0xB0, 22, 11);   /* the pot still stands at 11: picks up, doesn't jump */
+        CHECK(take(e).empty(), "after a remote move the LC pot must pick up again");
+        CHECK(display(e, "Last") == "LC U1 KNOB 2: TO 100", "pickup target after remote: '%s'", display(e, "Last").c_str());
+
+        CHECK(http_get("/files").find("off") != std::string::npos, "files off by default");
+        set(e, "Files", 1);
+        std::string j = http_get("/files");
+        CHECK(j.find("\"Song 1\"") != std::string::npos, "single Stems folder opens directly: %.120s", j.c_str());
+        j = http_get(("/files?dir=" + song).c_str());
+        CHECK(j.find("Kick.wav") != std::string::npos && j.find("Bass.wav") != std::string::npos, "audio files listed");
+        CHECK(j.find("notes.txt") == std::string::npos, "other files hidden");
+        CHECK(http_get(("/file?path=" + song + "/Kick.wav").c_str()) == data1, "file download intact");
+        CHECK(http_get(("/file?path=" + txt).c_str()).find("not available") != std::string::npos, "non-audio refused");
+        CHECK(http_get("/file?path=/etc/passwd").find("not available") != std::string::npos, "outside Stems refused");
+        CHECK(http_get(("/files?dir=" + song + "/../..").c_str()).find("not allowed") != std::string::npos, "../ out of Stems refused");
+        std::string z = http_get(("/zip?dir=" + song).c_str());
+        const std::string zp = std::string(stems) + ".zip";
+        f = std::fopen(zp.c_str(), "wb"); std::fwrite(z.data(), 1, z.size(), f); std::fclose(f);
+        CHECK(z.size() > data1.size() + data2.size() && z.compare(0, 4, "PK\x03\x04") == 0 && z.find("PK\x05\x06") != std::string::npos,
+              "zip streamed (%zu bytes)", z.size());
+        std::printf("ZIP %s\n", zp.c_str());
+        set(e, "Files", 0);
+        CHECK(http_get("/files").find("off") != std::string::npos, "files off again");
+        e->dispatcher(e, 1, 0, 0, nullptr, 0);
+        unsetenv("CCMAP_STEMS");
     }
 
     /* ---- stress: random parameters and MIDI ---- */

@@ -73,6 +73,7 @@ struct Settings {
     int feedback = 1;  /* send positions back: 0 off, 1 to the EC4 / E16, 2 also to every other USB controller */
     int takeover = 1;  /* absolute pots without feedback: 0 jump, 1 pickup */
     int web = 1;       /* phone view (HTTP server of the plugin) on */
+    int files = 0;     /* phone view may list and download audio files from /media and /mnt */
 };
 struct Msg { uint8_t port, len, d[3]; };
 
@@ -313,6 +314,28 @@ public:
         lc_ch = t;
         lc_seen = true;
     }
+    /* ---- remote control (phone view): a slot moved without its hardware control ----------
+     * v 0..127 in the control's own scale (a knob's position; a pad: >= 64 pressed). The hardware
+     * that owns the slot is told where it now stands (FEEDBACK), and a pot without feedback has to
+     * pick the value up again before it takes over. */
+    bool remote_set(int i, int v) {
+        if (i < 0 || i >= NMAP || !map[i].used) return false;
+        Map &m = map[i];
+        Run &r = run[i];
+        v = clampi(v, 0, 127);
+        if (m.stype == S_CC) {
+            m.val = (int16_t)v;
+            r.caught = false; r.prev = -1;
+            if (m.enc == ENC_ABS && fb_capable(m.dev)) emit(FB_PORT + m.dev, 0xB0 | m.sch, m.snum, v);
+        }
+        if (m.type != D_OFF) drive(i, v);
+        if (m.name[0]) std::snprintf(last, sizeof last, "%s = %d (REMOTE)", m.name, v);
+        else std::snprintf(last, sizeof last, "SLOT %d = %d (REMOTE)", i + 1, v);
+        last_slot = i;
+        changed |= CH_LAST;
+        return true;
+    }
+
     /* Launch Control SysEx: F0 00 20 29 02 0A 77 tt F7 = the user switched to template tt */
     void lc_sysex(const uint8_t *d, int n) {
         static const uint8_t H[7] = {0xF0, 0x00, 0x20, 0x29, 0x02, 0x0A, 0x77};
@@ -378,8 +401,8 @@ public:
     }
     std::string state() const {
         char b[128];
-        std::snprintf(b, sizeof b, "pg=%d;fo=%d;le=%d;th=%d;li=%d;in=%d;ar=%d;fb=%d;to=%d;wb=%d;",
-                      s.page, s.follow, s.leds, s.thru, s.link, s.input, s.arrows, s.feedback, s.takeover, s.web);
+        std::snprintf(b, sizeof b, "pg=%d;fo=%d;le=%d;th=%d;li=%d;in=%d;ar=%d;fb=%d;to=%d;wb=%d;fl=%d;",
+                      s.page, s.follow, s.leds, s.thru, s.link, s.input, s.arrows, s.feedback, s.takeover, s.web, s.files);
         std::string t = b;
         for (int i = 0; i < NMAP; i++) {
             const Map &m = map[i];
@@ -456,6 +479,7 @@ public:
             else if (k == "fb") s.feedback = clampi(x, 0, 2);
             else if (k == "to") s.takeover = x != 0;
             else if (k == "wb") s.web = x != 0;
+            else if (k == "fl") s.files = x != 0;
             else if (k.size() > 1 && k[0] == 'n' && k != "nm") {
                 const int i = std::atoi(k.c_str() + 1) - 1;
                 if (i >= 0 && i < NMAP) std::snprintf(map[i].name, sizeof map[i].name, "%s", unesc(v).c_str());

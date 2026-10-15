@@ -3,7 +3,7 @@
 #   vst/build/ccmap.so              -> /sdcard/vst/ on the device
 #   vst/build/pluginlist-entry.xml  the <PLUGIN ... category="Effect"> line for MPC.settings' pluginList-arm
 #   vst/build/skin/                 -> /sdcard/Synths/ on the device
-# ccmap_vst.cpp + the mapper ccmap_core.h + the phone view ccmap_web.h (page/index.html), linked against the device's libasound (ALSA seq ports, as
+# ccmap_vst.cpp + the mapper ccmap_core.h + the phone view ccmap_web.h (page/index.html) on the shared hub forcehub.h, linked against the device's libasound (ALSA seq ports, as
 # in Euclidier FX). vst.json/module.json only feed tools/gen_vst.py for params.h + the skin;
 # captions.py then redraws the labels in Titillium Web at the knob names' size. Offline test: test.sh.
 set -euo pipefail

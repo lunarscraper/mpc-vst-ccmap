@@ -18,8 +18,9 @@
  *        +--> "Link A": Out A also feeds every other plugin's "Control In" port (Euclidier FX,
  *        |    Acid FX, Maze FX ...), no routing needed
  *        +--> Launch Control LEDs over SysEx (pads show their slot, arrows show the pages)
- *        +--> PHONE VIEW: a web page on port 8000 of the Force's WLAN (ccmap_web.h): the Launch Control with
- *             the names, targets and positions of the active template, other controllers below; tap = name
+ *        +--> PHONE VIEW: a web page on the shared hub (forcehub.h, port 8000..8009) of the Force's WLAN (ccmap_web.h): the Launch Control with
+ *             the names, targets and positions of the active template, other controllers below; tap = name,
+ *             drag a knob / tap a pad = play it from the phone; FILES: download the Stems folder
  *        +--> FEEDBACK: the slots' positions back to a Faderfox EC4 / OXI E16 (value display, no jumps) on a
  *             page change, a load and when it is plugged in; PICKUP for pots without feedback
  *
@@ -91,7 +92,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.5.0"
+#define BUILD_ID "ccmap-0.7.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -107,12 +108,14 @@ enum {
     /* 0.3.0 */
     TEMPLATE,
     /* 0.5.0 */
-    WEB, WEB_ADDR, NKEYS
+    WEB, WEB_ADDR,
+    /* 0.6.0 */
+    FILES, NKEYS
 };
 static const char *const KEYS[NKEYS] = {
     "slot", "learn", "source", "page", "out", "ch", "type", "num", "lo", "hi", "btn", "clear",
     "cur_page", "follow", "leds", "thru", "link", "input", "arrows", "monitor", "preset", "load", "save",
-    "enc", "feedback", "takeover", "send", "template", "web", "web_addr",
+    "enc", "feedback", "takeover", "send", "template", "web", "web_addr", "files",
 };
 static int IDX[NKEYS];
 static int KEY_OF[NPARAMS];   /* PARAMS[] position -> key enum, -1 = not ours (popup flags) */
@@ -133,7 +136,8 @@ struct Plugin {
     std::atomic<bool> redisplay{false};
     std::atomic<int> cur{0};             /* selected preset slot, 0-based */
     std::vector<uint8_t> chunk;
-    ccweb::Server *web = nullptr;        /* phone view, owner instance only */
+    forcehub::Server *web = nullptr;     /* phone view on the shared hub, owner instance only */
+    ccweb::Hooks hooks;
     /* diagnostics */
     std::atomic<long> n_in{0}, n_out{0}, n_ignored{0}, n_fb{0};
 #ifndef NO_ALSA
@@ -211,6 +215,7 @@ static int ui_value(Plugin *w, int k) {
     case FEEDBACK: return mp.s.feedback;
     case TAKEOVER: return mp.s.takeover;
     case WEB: return mp.s.web;
+    case FILES: return mp.s.files;
     case PRESET: return w->cur.load() + 1;
     default: return 0;
     }
@@ -778,14 +783,32 @@ static void web_apply(Plugin *w) {
     bool want;
     { std::lock_guard<std::mutex> lk(w->mu); want = w->mp.s.web != 0; }
     if (want && !w->web) {
-        int port = 8000;
-        if (const char *p = std::getenv("CCMAP_WEB_PORT")) port = std::atoi(p);
-        w->web = new ccweb::Server();
-        w->web->page = CCMAP_PAGE;
-        w->web->state = [w] { return state_json(w); };
-        w->web->set_label = [w](int i, const std::string &n) { web_label(w, i, n); };
-        if (!w->web->start(port)) { LOG("[ccmap_vst] phone view: port %d not available\n", port); delete w->web; w->web = nullptr; }
-        else LOG("[ccmap_vst] phone view on http://%s\n", w->web->address().c_str());
+        w->hooks.state = [w] { return state_json(w); };
+        w->hooks.set_label = [w](int i, const std::string &n) { web_label(w, i, n); };
+        w->hooks.remote = [w](int i, int v) {
+            bool ok;
+            { std::lock_guard<std::mutex> lk(w->mu); ok = w->mp.remote_set(i, v); collect(w); }
+            wake(w);   /* the ALSA thread sends what the slot queued */
+            return ok;
+        };
+        w->hooks.files_on = [w] { std::lock_guard<std::mutex> lk(w->mu); return w->mp.s.files != 0; };
+        w->web = new forcehub::Server();
+        w->web->id = "ccmap";
+        w->web->name = "CC Map";
+        w->web->color = "#ff8a2a";
+        w->web->app = CCMAP_PAGE;
+        w->web->summary = [w] {
+            std::lock_guard<std::mutex> lk(w->mu);
+            char tn[32], b[96];
+            w->mp.template_name(tn, sizeof tn);
+            std::snprintf(b, sizeof b, "%s · Page %d%s", w->mp.lc_seen ? tn : "kein Launch Control", w->mp.s.page + 1,
+                          w->mp.learn ? " · LEARN" : "");
+            return std::string(b);
+        };
+        forcehub::Server *sv = w->web;
+        w->web->route = [w, sv](int c, const forcehub::Request &r) { return ccweb::route(*sv, w->hooks, c, r); };
+        if (!w->web->start()) { LOG("[ccmap_vst] phone view: no free port %d..%d\n", forcehub::Server::base_port(), forcehub::Server::base_port() + 9); delete w->web; w->web = nullptr; }
+        else LOG("[ccmap_vst] phone view on http://%s (hub HUB_VERSION %d)\n", w->web->address().c_str(), HUB_VERSION);
     } else if (!want && w->web) {
         w->web->stop(); delete w->web; w->web = nullptr;
         LOG("[ccmap_vst] phone view off\n");
@@ -901,6 +924,7 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         case FEEDBACK: if (mp.s.feedback != u) { mp.s.feedback = u; mp.feedback_all(); } break;
         case TAKEOVER: if (mp.s.takeover != u) { mp.s.takeover = u; mp.uncatch(); } break;
         case WEB: mp.s.web = u; break;
+        case FILES: mp.s.files = u; LOG("[ccmap_vst] stems download %s\n", u ? "ON" : "off"); break;
         default: break;
         }
         collect(w);
