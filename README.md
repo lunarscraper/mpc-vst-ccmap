@@ -6,7 +6,7 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.8.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.9.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
@@ -15,6 +15,7 @@ Control und UC-33 übernehmen per Pickup.
 0.7.0: gemeinsamer Hub mit den anderen Force-Plugins (z. B. Matrix): eine Adresse, eine Kachel pro Plugin.
 0.7.1: Werk-Preset „LC > DRUMGEN (CH 15)“ für DrumGen / DrumGen FX.
 0.8.0: **Baukasten** – eigene Seiten mit Fadern, Drehreglern, Tastern, Schaltern und XY-Pads auf dem Handy/iPad bauen, jede mit eigener CC, eigenem Kanal und Ausgang (eigene Kachel im Hub).
+0.9.0: Baukasten-Element **Picker** – zeigt einen Wert, antippen öffnet eine Rolle zum Drehen, optional mit Namen für die Werte.
 Projekte und Presets älterer Versionen laden weiter.
 
 ## Warum ein Insert-Effekt
@@ -229,10 +230,15 @@ Kanal** über einen der Ausgänge **Out A–D** von CC Map (mit LINK A also auch
 | Taster | gedrückt = MAX, losgelassen = MIN |
 | Schalter | jeder Tipp schaltet zwischen MIN und MAX |
 | XY-Pad | im Feld ziehen: X sendet CC, Y sendet CC Y |
+| Picker | zeigt den aktuellen Wert; antippen öffnet eine **Rolle**: nach oben/unten wischen, der Wert im Rahmen wird sofort gesendet. ▲/▼ gehen einen Wert weiter, ein Wert antippen springt hin, „Fertig“ oder daneben tippen schließt |
 
 **Bauen:** Oben „Bearbeiten“ tippen. „+ Seite“ legt eine Seite an (Handy 4 Spalten, iPad 8), „+ Element“
 fügt ein Element hinzu, ein Element antippen öffnet seine Einstellungen: Typ, Name, Farbe, Ausgang A–D,
 Kanal 1–16, CC (beim XY-Pad zwei), Min/Max (Min größer als Max dreht um), Breite und Höhe im Raster.
+Beim **Picker** stattdessen: erster und letzter Wert, **Schritt** (z. B. 0 bis 48 in Schritten von 16 = 0, 16, 32, 48)
+und optional **Namen der Werte**, durch Komma getrennt (`Sinus, Säge, Rechteck, Rauschen`): der erste Name gehört
+zum ersten Wert usw.; Werte ohne Namen zeigen die Zahl. Der Picker sendet genau den gewählten Wert. Die Force
+zeigt in LAST den Namen, z. B. `Wave = Rechteck (32)`.
 Dort auch: früher/später einsortieren, duplizieren, löschen. Die Zeile unten im Editor sagt in Klartext,
 was das Element sendet, und warnt, wenn dieselbe CC auf demselben Kanal schon auf der Seite liegt.
 „Seite einstellen“ ändert Name und Spaltenzahl, verschiebt oder löscht die Seite. „Fertig“ schaltet zurück
@@ -242,7 +248,7 @@ zum Spielen.
 (Namen, Kanal, CC, Min/Max übernommen; Pads werden Taster bzw. Schalter, Launch-Control-/EC4-/E16-Regler
 Drehregler, alles andere Fader). NOTE-, PROGRAM- und PAGE-Slots werden übersprungen.
 
-- Gespeichert wird bei jeder Änderung in **`ccmap_kit.txt`** neben `ccmap_presets.txt` – der Baukasten gilt
+- Gespeichert wird bei jeder Änderung in **`ccmap_kit.txt`** (Dateien von 0.8.0 laden weiter) neben `ccmap_presets.txt` – der Baukasten gilt
   für alle Projekte. Höchstens 16 Seiten mit je 48 Elementen.
 - Die Stellungen merkt sich nur das laufende Plugin: Nach einem Neustart zeigen die Elemente „–“, bis sie
   bewegt werden. Ein Drehregler ohne bekannte Stellung startet in der Mitte.
@@ -254,7 +260,7 @@ Drehregler, alles andere Fader). NOTE-, PROGRAM- und PAGE-Slots werden überspru
 - Port: der nächste freie nach CC Map (meist 8001). Weitere Hub-Plugins wie Matrix rücken einen Port weiter.
 
 Programmierschnittstelle (alles GET, Antwort JSON): `/kit`, `/vals?p=`, `/send?p=&i=&v=[&v2=]`,
-`/page?op=add|set|del|move`, `/el?op=put|del|move|dup`, `/import` – Einzelheiten in `ccmap_vst.cpp` bei `kit_route`.
+`/page?op=add|set|del|move`, `/el?op=put|del|move|dup` (Picker: `st=` Schritt, `lb=` Namen), `/import` – Einzelheiten in `ccmap_vst.cpp` bei `kit_route`.
 
 ## OXI E16
 

@@ -827,6 +827,20 @@ int main(int argc, char **argv) {
         j = kget("/kit");
         CHECK(j.find("Cutoff") != j.rfind("Cutoff") && j.find("Filter XY") != std::string::npos && j.find("\"Fill\"") == std::string::npos, "dup + del: %s", j.c_str());
         CHECK(kget("/el?op=nope&p=0&i=0").find("op:") != std::string::npos, "unknown op refused");
+        /* 0.9.0: PICKER - sends the chosen value itself, names for the values, step */
+        j = kget("/el?op=put&p=0&i=-1&t=picker&n=Wave&o=3&ch=2&cc=30&lo=0&hi=48&st=16&lb=Sinus,S%C3%A4ge,%20Rechteck%20,Rauschen");
+        CHECK(j.find("\"t\":\"picker\"") != std::string::npos && j.find("\"st\":16") != std::string::npos &&
+              j.find("\"lb\":\"Sinus,S\xC3\xA4ge, Rechteck ,Rauschen\"") != std::string::npos, "picker added: %s", j.c_str());
+        const int pk = 3;   /* Cutoff, Cutoff, Filter XY, Wave */
+        kget("/send?p=0&i=" + std::to_string(pk) + "&v=32");
+        o = take(e);
+        CHECK(is(o, 3, 0xB1, 30, 32), "picker sends 32 itself on Out D ch 2 CC 30: %s", dump(o).c_str());
+        CHECK(display(e, "Last") == "Wave = Rechteck (32)", "Force shows the value's name: '%s'", display(e, "Last").c_str());
+        kget("/send?p=0&i=" + std::to_string(pk) + "&v=40");
+        take(e);
+        CHECK(display(e, "Last") == "Wave = 40", "a value without a name: '%s'", display(e, "Last").c_str());
+        CHECK(kget("/el?op=put&p=0&i=3&st=0").find("\"st\":1") != std::string::npos, "step at least 1");
+        kget("/el?op=put&p=0&i=3&st=16");
         /* umlauts and separators in names, a second page, page order */
         kget("/page?op=add&name=Gr%C3%BC%C3%9Fe%09%0Atab&cols=12");
         j = kget("/kit");
@@ -839,6 +853,7 @@ int main(int argc, char **argv) {
         std::string txt;
         if (FILE *f = std::fopen(kitf, "r")) { char b[4096]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) txt.append(b, n); std::fclose(f); }
         CHECK(txt.compare(0, 7, "CCKIT1\n") == 0 && txt.find("E\tfader\tCutoff\t2\t2\t5\t74\t") != std::string::npos, "kit file: %s", txt.c_str());
+        CHECK(txt.find("E\tpicker\tWave\t0\t3\t2\t30\t2\t0\t48\t1\t2\t16\tSinus,S\xC3\xA4ge, Rechteck ,Rauschen\n") != std::string::npos, "picker in the file: %s", txt.c_str());
         /* import from the map: knob (CC), pad (TOGGLE), a NOTE slot is skipped */
         set(e, "Slot", 1); press(e, "Learn"); t_in(e, DEV_LC, 0xB0, 21, 40); set(e, "Number", 74); set(e, "Channel", 3);
         http_get("/label?slot=1&name=Res");
@@ -855,6 +870,13 @@ int main(int argc, char **argv) {
         j = http_get("/kit", kp);
         CHECK(j.find("Cutoff") != std::string::npos && j.find("CC Map S1") != std::string::npos && j.find("\"v\":-1") != std::string::npos,
               "kit restored from the file, values unknown: %s", j.c_str());
+        CHECK(j.find("\"lb\":\"Sinus,S\xC3\xA4ge") != std::string::npos, "picker names restored");
+        e->dispatcher(e, 1, 0, 0, nullptr, 0);
+        if (FILE *f = std::fopen(kitf, "w")) { std::fputs("CCKIT1\nP\tOld\t4\nE\tknob\tCut\t1\t0\t5\t74\t75\t0\t127\t1\t2\n", f); std::fclose(f); }
+        e = open_plugin(lib);
+        j = kget("/kit");
+        CHECK(j.find("\"n\":\"Cut\"") != std::string::npos && j.find("\"st\":1") != std::string::npos && j.find("\"lb\":\"\"") != std::string::npos,
+              "a 0.8.0 kit file loads: %s", j.c_str());
         CHECK(kget("/page?op=del&p=9").find("no such page") != std::string::npos, "delete missing page refused");
         for (int k = 0; k < 20; k++) kget("/page?op=add");
         CHECK(kget("/page?op=add").find("16 pages") != std::string::npos, "at most 16 pages");
@@ -863,7 +885,7 @@ int main(int argc, char **argv) {
         set(e, "Web View", 0);
         CHECK(kget("/kit").empty(), "kit server stops with the phone view");
         set(e, "Web View", 1);
-        CHECK(kget("/kit").find("CC Map S1") != std::string::npos, "and comes back");
+        CHECK(kget("/kit").find("\"name\":\"Old\"") != std::string::npos, "and comes back");
         e->dispatcher(e, 1, 0, 0, nullptr, 0);
         unlink(kitf);
     }

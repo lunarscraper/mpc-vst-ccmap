@@ -98,7 +98,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.8.0"
+#define BUILD_ID "ccmap-0.9.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -876,8 +876,9 @@ static bool kit_write(const std::string &text) {
  *   GET /vals?p=P                         positions of page P (polled while playing)
  *   GET /send?p=P&i=I&v=V[&v2=V2]         element I of page P to position V (XY: V2 = Y), 0..127
  *   GET /page?op=add|set|del|move&p=P&name=N&cols=C&dir=-1|1
- *   GET /el?op=put|del|move|dup&p=P&i=I (put with i=-1: new) &t=fader|knob|button|toggle|xy&n=Name
- *           &c=colour&o=0..3&ch=1..16&cc=&cc2=&lo=&hi=&w=&h=&dir=-1|1
+ *   GET /el?op=put|del|move|dup&p=P&i=I (put with i=-1: new) &t=fader|knob|button|toggle|xy|picker&n=Name
+ *           &c=colour&o=0..3&ch=1..16&cc=&cc2=&lo=&hi=&w=&h=&st=step&lb=labels,comma,separated&dir=-1|1
+ *   (/send for a PICKER: V is the value to send itself, not a position)
  *   GET /import                           a new page from the CC Map slots of the active page
  * Edits answer with the whole kit (like /kit) and are saved to the SD card at once. */
 /* whether the query has KEY= as a whole key (forcehub's Request::has() also matches "cc=" for "c") */
@@ -904,6 +905,8 @@ static int kit_route(Plugin *w, int c, const forcehub::Request &r) {
                 cckit::Kit::send(e, r.num("v"), r.num("v2", -1), [w](int port, int st, int d1, int d2) { w->mp.emit(port, st, d1, d2); });
                 const std::string nm = e.name.empty() ? "KIT CC " + std::to_string(e.cc) : e.name;
                 if (e.type == cckit::T_XY) std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %d / %d", nm.c_str(), e.last, e.last2);
+                else if (e.type == cckit::T_PICKER && !cckit::Kit::label_for(e, e.last).empty())
+                    std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %s (%d)", nm.c_str(), cckit::Kit::label_for(e, e.last).c_str(), e.last);
                 else std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %d", nm.c_str(), e.last);
                 w->mp.last_slot = -1;
                 w->mp.changed |= CH_LAST;
@@ -970,6 +973,8 @@ static int kit_route(Plugin *w, int c, const forcehub::Request &r) {
                         if (qhas(r, "hi")) e.hi = r.num("hi");
                         if (qhas(r, "w")) e.w = r.num("w");
                         if (qhas(r, "h")) e.h = r.num("h");
+                        if (qhas(r, "st")) e.step = r.num("st");
+                        if (qhas(r, "lb")) e.labels = r.arg("lb");
                         k.sanitize(e);
                         e.last = e.last2 = -1;   /* a changed target gets the next move in any case */
                         if (el_ok) el[i] = e; else el.push_back(e);

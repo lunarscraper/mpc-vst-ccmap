@@ -101,6 +101,27 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
 .summary { font: 500 14px var(--mono); color: var(--hot); background: var(--bg); border-radius: 10px; padding: 10px 12px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row .btn { flex: 1 1 auto; }
+/* picker tile */
+.el.pick .pv { position: absolute; left: 6px; right: 6px; top: 50%; transform: translateY(-38%); text-align: center; font: 800 26px/1.1 var(--sans); color: var(--k); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.el.pick .pv small { display: block; font: 600 12px var(--mono); color: var(--muted); margin-top: 2px; }
+.el.pick .chev { position: absolute; right: 7px; bottom: 5px; color: var(--muted); font-size: 9px; line-height: 1; pointer-events: none; text-align: center; }
+.el.pick .num { display: none; }
+.el.pick.short .pv { transform: translateY(-20%); }
+.el.pick.short .pv small { display: none; }
+/* the roll */
+.roll { position: fixed; inset: 0; z-index: 12; display: flex; align-items: center; justify-content: center; background: #000a; padding: 16px; }
+.roll-card { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--k, var(--accent)); border-radius: 16px; padding: 14px; display: grid; gap: 12px; }
+.roll-title { font: 700 17px var(--sans); display: flex; justify-content: space-between; gap: 10px; }
+.roll-title span { font: 500 13px var(--mono); color: var(--muted); align-self: center; }
+.roll-wheel { position: relative; height: 280px; border-radius: 12px; background: var(--bg); overflow: hidden; }
+.roll-band { position: absolute; left: 8px; right: 8px; top: 112px; height: 56px; border-radius: 10px; border: 2px solid var(--k, var(--accent)); pointer-events: none; z-index: 1; }
+.roll-list { height: 100%; overflow-y: scroll; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; padding: 112px 0; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+.roll-list::-webkit-scrollbar { display: none; }
+.roll-item { height: 56px; scroll-snap-align: center; display: flex; align-items: center; justify-content: center; gap: 10px; font: 700 22px var(--sans); color: var(--muted); cursor: pointer; transition: color .1s, transform .1s; user-select: none; -webkit-user-select: none; }
+.roll-item small { font: 500 13px var(--mono); color: var(--muted); }
+.roll-item.sel { color: var(--fg); transform: scale(1.12); }
+.roll-item.near { color: #c9c5bc; }
+.roll .row .btn { min-height: 52px; font-size: 18px; }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 16px); background: #000d; color: var(--fg); padding: 10px 16px; border-radius: 10px; z-index: 20; font-size: 14px; max-width: calc(100% - 32px); }
 </style>
 </head>
@@ -152,6 +173,11 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
     <div class="field"><span id="es-lo-l">Min</span><div class="step" data-for="es-lo"><button type="button" data-d="-1">−</button><input id="es-lo" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
     <div class="field"><span id="es-hi-l">Max</span><div class="step" data-for="es-hi"><button type="button" data-d="-1">−</button><input id="es-hi" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
   </div>
+  <div class="two" id="es-pick-f">
+    <div class="field"><span>Schritt</span><div class="step" data-for="es-st"><button type="button" data-d="-1">−</button><input id="es-st" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
+    <div class="field"><span>Werte auf der Rolle</span><div class="summary" id="es-count" style="color:var(--fg)"></div></div>
+  </div>
+  <label class="field" id="es-lb-f"><span>Namen der Werte (optional)</span><input type="text" id="es-lb" maxlength="600" autocomplete="off" placeholder="z. B. Sinus, Säge, Rechteck – leer = Zahlen"></label>
   <div class="two">
     <div class="field"><span>Breite</span><div class="seg" id="es-w"></div></div>
     <div class="field"><span>Höhe</span><div class="seg" id="es-h"></div></div>
@@ -179,6 +205,14 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
   </div>
 </div>
 
+<div class="roll" id="roll" hidden role="dialog" aria-labelledby="roll-title">
+  <div class="roll-card" id="roll-card">
+    <div class="roll-title" id="roll-title"></div>
+    <div class="roll-wheel"><div class="roll-band"></div><div class="roll-list" id="roll-list"></div></div>
+    <div class="row"><button type="button" class="btn" id="roll-up" aria-label="Wert darüber">▲</button><button type="button" class="btn" id="roll-down" aria-label="Wert darunter">▼</button><button type="button" class="btn primary" id="roll-done">Fertig</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -186,8 +220,8 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const COLORS = ["#ff8a2a", "#ffc23d", "#7bd389", "#4fc3a1", "#5aa9ff", "#a98bff", "#ff6fae", "#ff5a4f"];
-const TYPES = [["fader", "Fader"], ["knob", "Drehregler"], ["button", "Taster"], ["toggle", "Schalter"], ["xy", "XY-Pad"]];
-const SIZE = { fader: [1, 2], knob: [1, 2], button: [1, 1], toggle: [1, 1], xy: [2, 2] };
+const TYPES = [["fader", "Fader"], ["knob", "Drehregler"], ["button", "Taster"], ["toggle", "Schalter"], ["xy", "XY-Pad"], ["picker", "Picker"]];
+const SIZE = { fader: [1, 2], knob: [1, 2], button: [1, 1], toggle: [1, 1], xy: [2, 2], picker: [1, 1] };
 const OUTS = "ABCD";
 
 let kit = { rev: 0, pages: [], max_pages: 16, max_el: 48 };
@@ -238,8 +272,18 @@ async function pump(s) {
   s.busy = false;
 }
 const scale = (e, v) => Math.max(0, Math.min(127, Math.round(e.lo + (e.hi - e.lo) * v / 127)));
+/* PICKER: its values MIN..MAX in steps of STEP, the k-th name belongs to the k-th value */
+function pickVals(e) {
+  const out = [], st = Math.max(1, e.st || 1);
+  if (e.hi >= e.lo) for (let v = e.lo; v <= e.hi; v += st) out.push(v);
+  else for (let v = e.lo; v >= e.hi; v -= st) out.push(v);
+  return out;
+}
+const pickNames = (e) => (e.lb ? e.lb.split(",").map((x) => x.trim()) : []);
+function pickLabel(e, v) { const k = pickVals(e).indexOf(v), L = pickNames(e); return k >= 0 && k < L.length ? L[k] : ""; }
 function showLast(e, i) {
   const n = e.n || defaultName(e, i);
+  if (e.t === "picker") { const l = pickLabel(e, e.v); $("last").textContent = n + " · CC " + e.cc + " = " + (l ? l + " (" + e.v + ")" : e.v) + " · K" + e.ch + " · " + OUTS[e.o]; return; }
   $("last").textContent = e.t === "xy"
     ? n + " · CC " + e.cc + " = " + scale(e, e.v) + " / CC " + e.cc2 + " = " + scale(e, e.v2) + " · K" + e.ch + " · " + OUTS[e.o]
     : n + " · CC " + e.cc + " = " + scale(e, e.v) + " · K" + e.ch + " · " + OUTS[e.o];
@@ -262,6 +306,14 @@ function inner(e) {
   if (e.t === "fader") return '<div class="fill" style="height:' + f * 100 + '%"></div><div class="cap" style="bottom:calc(' + f * 100 + '% - 2px)"></div>';
   if (e.t === "knob") return arc(e.v < 0 ? 0 : f);
   if (e.t === "button" || e.t === "toggle") return '<div class="face"></div>';
+  if (e.t === "picker") {
+    const l = e.v < 0 ? "" : pickLabel(e, e.v);
+    /* the largest size at which the text fits the tile (a letter is about 0.62 of the font size wide) */
+    const txt = e.v < 0 ? "–" : l || String(e.v), pg = page();
+    const room = (($("grid").clientWidth || 360) - 8 * (pg.cols - 1)) / pg.cols * Math.min(e.w, pg.cols) + 8 * (Math.min(e.w, pg.cols) - 1) - 14;
+    const fs = [26, 22, 19, 16, 13, 11].find((f) => txt.length * f * 0.62 <= room) || 11;
+    return '<div class="pv" style="font-size:' + fs + 'px">' + esc(txt) + (l ? "<small>" + e.v + "</small>" : "") + '</div><div class="chev">▲<br>▼</div>';
+  }
   const x = e.v < 0 ? 50 : f * 100, y = e.v2 < 0 ? 50 : 100 - (e.v2 / 127) * 100;
   return '<div class="xy-h" style="top:' + y + '%"></div><div class="xy-v" style="left:' + x + '%"></div><div class="xy-dot" style="left:' + x + "%;top:" + y + '%"></div>';
 }
@@ -269,6 +321,7 @@ function numText(e) {
   if (e.v < 0) return "–";
   if (e.t === "xy") return scale(e, e.v) + "/" + (e.v2 < 0 ? "–" : scale(e, e.v2));
   if (e.t === "button" || e.t === "toggle") return e.v >= 64 ? "AN" : "AUS";
+  if (e.t === "picker") return String(e.v);
   return String(scale(e, e.v));
 }
 function paint(el, e) {
@@ -288,14 +341,14 @@ function render() {
   g.style.gridTemplateColumns = "repeat(" + pg.cols + ", minmax(0, 1fr))";
   sizeRows();
   g.innerHTML = pg.el.map((e, i) =>
-    '<div class="el' + (e.t === "button" || e.t === "toggle" ? " press" : "") + (e.h === 1 ? " short" : "") + '" data-i="' + i + '" style="--k:' + COLORS[e.c] +
+    '<div class="el' + (e.t === "button" || e.t === "toggle" ? " press" : "") + (e.t === "picker" ? " pick" : "") + (e.h === 1 ? " short" : "") + '" data-i="' + i + '" style="--k:' + COLORS[e.c] +
     ";grid-column:span " + Math.min(e.w, pg.cols) + ";grid-row:span " + e.h + '">' +
     '<div class="body"></div><div class="lbl">' + esc(e.n || defaultName(e, i)) + '</div><div class="num"></div><div class="tg">' + esc(target(e)) + "</div></div>").join("") +
     (editMode ? '<button type="button" class="add" id="add-el">+ Element</button>' : "");
   g.querySelectorAll(".el").forEach((el) => paint(el, pg.el[+el.dataset.i]));
   $("hint").textContent = editMode
     ? "Element antippen zum Einstellen. „Fertig“ oben schaltet zurück zum Spielen."
-    : pg.el.length ? "Fader: Position antippen oder ziehen · Drehregler: auf- und abwischen · XY: im Feld ziehen."
+    : pg.el.length ? "Fader: Position antippen oder ziehen · Drehregler: auf- und abwischen · XY: im Feld ziehen · Picker: antippen und die Rolle drehen."
                    : "Diese Seite ist leer. Oben „Bearbeiten“ tippen und Elemente hinzufügen.";
 }
 function sizeRows() {
@@ -335,6 +388,7 @@ $("grid").addEventListener("pointerdown", (ev) => {
   if (e.t === "button") { e.v = 127; send(i, 127); paint(el, e); showLast(e, i); }
   else if (e.t === "toggle") { e.v = e.v >= 64 ? 0 : 127; send(i, e.v); paint(el, e); showLast(e, i); }
   else if (e.t === "fader" || e.t === "xy") apply(d, posValue(el, ev, e));
+  else if (e.t === "picker") d.x0 = ev.clientX;
 });
 $("grid").addEventListener("pointermove", (ev) => {
   const d = drags.get(ev.pointerId);
@@ -350,7 +404,74 @@ function endTouch(ev) {
   touching = Math.max(0, touching - 1);
   d.el.classList.remove("active");
   if (d.e.t === "button") { d.e.v = 0; send(d.i, 0); paint(d.el, d.e); showLast(d.e, d.i); }
+  if (d.e.t === "picker" && ev.type === "pointerup" && Math.abs(ev.clientY - d.y0) < 24 && Math.abs(ev.clientX - d.x0) < 24) openRoll(d.i);
 }
+
+/* ---- the PICKER roll: swipe it up / down, the value in the frame is sent at once ---- */
+const ROLL_H = 56;
+let roll = null;   /* { i, e, vals, k } */
+function openRoll(i) {
+  const e = page().el[i], vals = pickVals(e), names = pickNames(e);
+  if (!vals.length) return;
+  let k = vals.indexOf(e.v);
+  if (k < 0) {   /* unknown or between two values: the nearest one, sent only once the roll moves */
+    k = 0;
+    if (e.v >= 0) vals.forEach((v, n) => { if (Math.abs(v - e.v) < Math.abs(vals[k] - e.v)) k = n; });
+  }
+  roll = { i, e, vals, k };
+  $("roll-card").style.setProperty("--k", COLORS[e.c]);
+  $("roll-title").innerHTML = esc(e.n || defaultName(e, i)) + "<span>CC " + e.cc + " · K" + e.ch + " · " + OUTS[e.o] + "</span>";
+  $("roll-list").innerHTML = vals.map((v, n) => '<div class="roll-item" data-k="' + n + '">' + (names[n] ? esc(names[n]) + "<small>" + v + "</small>" : v) + "</div>").join("");
+  $("roll").hidden = false;
+  sheetOpen = true;
+  $("roll-list").scrollTop = k * ROLL_H;
+  markRoll(k);
+}
+function markRoll(k) {
+  $("roll-list").querySelectorAll(".roll-item").forEach((it, n) => {
+    it.classList.toggle("sel", n === k);
+    it.classList.toggle("near", Math.abs(n - k) === 1);
+  });
+}
+function rollTo(k) {
+  if (!roll) return;
+  k = Math.max(0, Math.min(roll.vals.length - 1, k));
+  if (k === roll.k) return;
+  roll.k = k;
+  markRoll(k);
+  rollSend();
+}
+function rollSend() {
+  const e = roll.e, k = roll.k;
+  e.v = roll.vals[k];
+  send(roll.i, e.v);
+  const el = document.querySelector('.el[data-i="' + roll.i + '"]');
+  if (el) paint(el, e);
+  showLast(e, roll.i);
+}
+let rollRaf = 0;
+$("roll-list").addEventListener("scroll", () => {
+  if (rollRaf) return;
+  rollRaf = requestAnimationFrame(() => { rollRaf = 0; if (roll) rollTo(Math.round($("roll-list").scrollTop / ROLL_H)); });
+});
+$("roll-list").addEventListener("click", (ev) => {
+  const it = ev.target.closest(".roll-item");
+  if (!it || !roll) return;
+  if (+it.dataset.k === roll.k) { if (roll.e.v !== roll.vals[roll.k]) rollSend(); }   /* the value in the frame, not sent yet */
+  else $("roll-list").scrollTo({ top: +it.dataset.k * ROLL_H, behavior: "smooth" });
+});
+function rollStep(d) { if (roll) $("roll-list").scrollTo({ top: Math.max(0, roll.k + d) * ROLL_H, behavior: "smooth" }); }
+$("roll-up").addEventListener("click", () => rollStep(-1));
+$("roll-down").addEventListener("click", () => rollStep(1));
+function closeRoll() { $("roll").hidden = true; roll = null; sheetOpen = false; }
+$("roll-done").addEventListener("click", closeRoll);
+$("roll").addEventListener("click", (ev) => { if (ev.target === $("roll")) closeRoll(); });
+addEventListener("keydown", (ev) => {
+  if (!roll) return;
+  if (ev.key === "ArrowUp") { ev.preventDefault(); rollStep(-1); }
+  else if (ev.key === "ArrowDown") { ev.preventDefault(); rollStep(1); }
+  else if (ev.key === "Escape" || ev.key === "Enter") closeRoll();
+});
 $("grid").addEventListener("pointerup", endTouch);
 $("grid").addEventListener("pointercancel", endTouch);
 $("grid").addEventListener("contextmenu", (ev) => ev.preventDefault());
@@ -413,10 +534,10 @@ document.querySelectorAll(".step").forEach((s) => s.addEventListener("click", (e
   const b = ev.target.closest("button[data-d]");
   if (!b) return;
   const inp = $(s.dataset.for);
-  inp.value = clampNum(parseInt(inp.value, 10) + +b.dataset.d, 0, 127);
+  inp.value = clampNum(parseInt(inp.value, 10) + +b.dataset.d, s.dataset.for === "es-st" ? 1 : 0, 127);
   summary();
 }));
-["es-cc", "es-cc2", "es-lo", "es-hi", "es-name"].forEach((id) => $(id).addEventListener("input", summary));
+["es-cc", "es-cc2", "es-lo", "es-hi", "es-name", "es-st", "es-lb"].forEach((id) => $(id).addEventListener("input", summary));
 $("es-ch").innerHTML = range(1, 16).map((c) => '<option value="' + c + '">Kanal ' + c + "</option>").join("");
 $("es-ch").addEventListener("change", summary);
 
@@ -425,11 +546,13 @@ let ed = null;   /* { i: index or -1, e: working copy } */
 let lastPicked = { t: "fader", c: 0, o: 0, ch: 1 };
 function editorType(t) {
   ed.e.t = t;
-  const xy = t === "xy", pressy = t === "button" || t === "toggle";
+  const xy = t === "xy", pressy = t === "button" || t === "toggle", pick = t === "picker";
   $("es-cc2-f").style.visibility = xy ? "visible" : "hidden";
   $("es-cc-l").textContent = xy ? "CC X" : "CC";
-  $("es-lo-l").textContent = pressy ? "Wert AUS" : "Min";
-  $("es-hi-l").textContent = pressy ? "Wert AN" : "Max";
+  $("es-lo-l").textContent = pressy ? "Wert AUS" : pick ? "Erster Wert" : "Min";
+  $("es-hi-l").textContent = pressy ? "Wert AN" : pick ? "Letzter Wert" : "Max";
+  $("es-pick-f").hidden = !pick;
+  $("es-lb-f").hidden = !pick;
 }
 function openEditor(i) {
   const pg = page();
@@ -439,7 +562,7 @@ function openEditor(i) {
     const used = pg.el.map((x) => Math.max(x.cc, x.t === "xy" ? x.cc2 : 0));
     const cc = used.length ? Math.min(127, Math.max.apply(null, used) + 1) : 1;
     const t = lastPicked.t;
-    e = { t, n: "", c: lastPicked.c, o: lastPicked.o, ch: lastPicked.ch, cc, cc2: Math.min(127, cc + 1), lo: 0, hi: 127, w: SIZE[t][0], h: SIZE[t][1], v: -1, v2: -1 };
+    e = { t, n: "", c: lastPicked.c, o: lastPicked.o, ch: lastPicked.ch, cc, cc2: Math.min(127, cc + 1), lo: 0, hi: 127, w: SIZE[t][0], h: SIZE[t][1], st: 1, lb: "", v: -1, v2: -1 };
   }
   ed = { i, e };
   $("es-title").textContent = i >= 0 ? "Element " + (i + 1) + " einstellen" : "Neues Element";
@@ -451,6 +574,7 @@ function openEditor(i) {
   seg($("es-out"), [0, 1, 2, 3].map((o) => [o, OUTS[o]]), e.o, summary);
   $("es-ch").value = e.ch;
   $("es-cc").value = e.cc; $("es-cc2").value = e.cc2; $("es-lo").value = e.lo; $("es-hi").value = e.hi;
+  $("es-st").value = e.st || 1; $("es-lb").value = e.lb || "";
   seg($("es-w"), range(1, pg.cols).map((n) => [n, n]), Math.min(e.w, pg.cols), summary);
   seg($("es-h"), range(1, 4).map((n) => [n, n]), e.h, summary);
   editorType(e.t);
@@ -471,6 +595,8 @@ function readEditor() {
   e.lo = clampNum(parseInt($("es-lo").value, 10), 0, 127);
   e.hi = clampNum(parseInt($("es-hi").value, 10), 0, 127);
   e.w = +segVal($("es-w")); e.h = +segVal($("es-h"));
+  e.st = clampNum(parseInt($("es-st").value, 10), 1, 127);
+  e.lb = $("es-lb").value.trim();
   return e;
 }
 function summary() {
@@ -480,6 +606,14 @@ function summary() {
   if (e.t === "xy") s = "X sendet CC " + e.cc + ", Y sendet CC " + e.cc2 + " (" + e.lo + "–" + e.hi + ") über " + out;
   else if (e.t === "button") s = "Gedrückt CC " + e.cc + " = " + e.hi + ", losgelassen = " + e.lo + " · " + out;
   else if (e.t === "toggle") s = "Jeder Tipp schaltet CC " + e.cc + " zwischen " + e.lo + " und " + e.hi + " · " + out;
+  else if (e.t === "picker") {
+    const vals = pickVals(e), names = pickNames(e);
+    $("es-count").textContent = vals.length + (vals.length === 1 ? " Wert" : " Werte");
+    const ex = vals.slice(0, 3).map((v, k) => (names[k] ? names[k] + "=" + v : v)).join(", ") + (vals.length > 3 ? " …" : "");
+    s = "Rolle mit " + vals.length + " Werten (" + ex + "), sendet CC " + e.cc + " über " + out +
+      (names.length > vals.length ? " · Achtung: " + names.length + " Namen, aber nur " + vals.length + " Werte" : "") +
+      (names.length && names.length < vals.length ? " · Werte ohne Namen zeigen die Zahl" : "");
+  }
   else s = "Sendet CC " + e.cc + " (" + e.lo + "–" + e.hi + (e.lo > e.hi ? ", umgekehrt" : "") + ") über " + out;
   const mine = e.t === "xy" ? [e.cc, e.cc2] : [e.cc];
   const pg = page(), clash = pg.el.some((x, k) => k !== ed.i && x.o === e.o && x.ch === e.ch && (x.t === "xy" ? [x.cc, x.cc2] : [x.cc]).some((c) => mine.includes(c)));
@@ -487,7 +621,7 @@ function summary() {
 }
 function elQuery(e) {
   return "&t=" + e.t + "&n=" + encodeURIComponent(e.n) + "&c=" + e.c + "&o=" + e.o + "&ch=" + e.ch + "&cc=" + e.cc + "&cc2=" + e.cc2 +
-    "&lo=" + e.lo + "&hi=" + e.hi + "&w=" + e.w + "&h=" + e.h;
+    "&lo=" + e.lo + "&hi=" + e.hi + "&w=" + e.w + "&h=" + e.h + "&st=" + e.st + "&lb=" + encodeURIComponent(e.lb);
 }
 $("es-save").addEventListener("click", async () => {
   const e = readEditor();

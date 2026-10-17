@@ -9,6 +9,8 @@
  *   BUTTON  MAX while held, MIN on release
  *   TOGGLE  every tap switches MIN / MAX
  *   XY      a square pad: X = CC, Y = CC 2
+ *   PICKER  shows its value; a tap opens a roll to turn up / down: the values MIN..MAX in steps of STEP,
+ *           optionally with names ("Saw,Square,Noise"); sends the chosen value itself
  *
  * The kit is one library for every project (a text file next to the presets, written on every edit,
  * never on a value move). Values live in memory only: after a restart a control shows "-" until it
@@ -28,13 +30,13 @@
 
 namespace cckit {
 
-enum Type { T_FADER = 0, T_KNOB = 1, T_BUTTON = 2, T_TOGGLE = 3, T_XY = 4, NTYPES = 5 };
-enum { MAXPAGES = 16, MAXEL = 48, NCOLORS = 8, NAMELEN = 24 };
+enum Type { T_FADER = 0, T_KNOB = 1, T_BUTTON = 2, T_TOGGLE = 3, T_XY = 4, T_PICKER = 5, NTYPES = 6 };
+enum { MAXPAGES = 16, MAXEL = 48, NCOLORS = 8, NAMELEN = 24, LABELSLEN = 600 };
 
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /* printable, no tabs / line breaks, at most NAMELEN bytes without cutting a UTF-8 character */
-static inline std::string clean(const std::string &s) {
+static inline std::string clean(const std::string &s, size_t maxlen = NAMELEN) {
     std::string o;
     for (char c : s) {
         const unsigned char u = (unsigned char)c;
@@ -45,8 +47,8 @@ static inline std::string clean(const std::string &s) {
     size_t st = 0;
     while (st < o.size() && o[st] == ' ') st++;
     o = o.substr(st);
-    if (o.size() > NAMELEN) {
-        size_t n = NAMELEN;
+    if (o.size() > maxlen) {
+        size_t n = maxlen;
         while (n > 0 && ((unsigned char)o[n] & 0xC0) == 0x80) n--;   /* o[n] continues a character: cut before it */
         o.resize(n);
     }
@@ -61,6 +63,8 @@ struct El {
     int cc = 1, cc2 = 2;      /* cc2: Y of an XY pad */
     int lo = 0, hi = 127;     /* MIN > MAX inverts */
     int w = 1, h = 2;
+    int step = 1;             /* PICKER: distance between two values */
+    std::string labels;       /* PICKER: names of the values from MIN on, comma separated, may be empty */
     /* runtime */
     int v = -1, v2 = -1;      /* position 0..127 of the control (before MIN..MAX), -1 = unknown */
     int last = -1, last2 = -1;/* last value sent */
@@ -72,7 +76,7 @@ struct Page {
 };
 
 static inline const char *type_key(int t) {
-    static const char *const K[NTYPES] = {"fader", "knob", "button", "toggle", "xy"};
+    static const char *const K[NTYPES] = {"fader", "knob", "button", "toggle", "xy", "picker"};
     return K[clampi(t, 0, NTYPES - 1)];
 }
 
@@ -92,6 +96,8 @@ struct Kit {
         e.hi = clampi(e.hi, 0, 127);
         e.w = clampi(e.w, 1, 8);
         e.h = clampi(e.h, 1, 4);
+        e.step = clampi(e.step, 1, 127);
+        e.labels = clean(e.labels, LABELSLEN);
     }
     void sanitize(Page &p) const {
         p.name = clean(p.name);
@@ -107,7 +113,7 @@ struct Kit {
         bool any = false;
         v = clampi(v, 0, 127);
         e.v = v;
-        const int s = scale(e, v);
+        const int s = e.type == T_PICKER ? v : scale(e, v);   /* a picker sends the chosen value itself */
         if (e.type == T_BUTTON || s != e.last) { emit(e.out, 0xB0 | e.ch, e.cc, s); e.last = s; any = true; }
         if (e.type == T_XY && v2 >= 0) {
             v2 = clampi(v2, 0, 127);
@@ -119,7 +125,8 @@ struct Kit {
     }
 
     /* ---- file: "CCKIT1", then per page "P<TAB>name<TAB>cols", per element "E<TAB>type<TAB>name<TAB>
-     *      color<TAB>out<TAB>channel 1..16<TAB>cc<TAB>cc2<TAB>min<TAB>max<TAB>w<TAB>h" ---- */
+     *      color<TAB>out<TAB>channel 1..16<TAB>cc<TAB>cc2<TAB>min<TAB>max<TAB>w<TAB>h<TAB>step<TAB>labels"
+     *      (step and labels since 0.9.0; older files without them load with step 1, no labels) ---- */
     std::string to_text() const {
         std::string t = "CCKIT1\n";
         char b[96];
@@ -128,8 +135,8 @@ struct Kit {
             t += "P\t" + p.name + b;
             for (const El &e : p.el) {
                 t += std::string("E\t") + type_key(e.type) + "\t" + e.name;
-                std::snprintf(b, sizeof b, "\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", e.color, e.out, e.ch + 1, e.cc, e.cc2, e.lo, e.hi, e.w, e.h);
-                t += b;
+                std::snprintf(b, sizeof b, "\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t", e.color, e.out, e.ch + 1, e.cc, e.cc2, e.lo, e.hi, e.w, e.h, e.step);
+                t += b + e.labels + "\n";
             }
         }
         return t;
@@ -170,6 +177,8 @@ struct Kit {
                 e.hi = std::atoi(f[9].c_str());
                 e.w = std::atoi(f[10].c_str());
                 e.h = std::atoi(f[11].c_str());
+                if (f.size() >= 13) e.step = std::atoi(f[12].c_str());
+                if (f.size() >= 14) e.labels = f[13];
                 ps.back().el.push_back(e);
             }
         }
@@ -181,10 +190,10 @@ struct Kit {
 
     /* ---- JSON for the page ---- */
     static std::string el_json(const El &e) {
-        char b[200];
-        std::snprintf(b, sizeof b, "{\"t\":\"%s\",\"c\":%d,\"o\":%d,\"ch\":%d,\"cc\":%d,\"cc2\":%d,\"lo\":%d,\"hi\":%d,\"w\":%d,\"h\":%d,\"v\":%d,\"v2\":%d,\"n\":",
-                      type_key(e.type), e.color, e.out, e.ch + 1, e.cc, e.cc2, e.lo, e.hi, e.w, e.h, e.v, e.v2);
-        return b + forcehub::js(e.name) + "}";
+        char b[220];
+        std::snprintf(b, sizeof b, "{\"t\":\"%s\",\"c\":%d,\"o\":%d,\"ch\":%d,\"cc\":%d,\"cc2\":%d,\"lo\":%d,\"hi\":%d,\"w\":%d,\"h\":%d,\"st\":%d,\"v\":%d,\"v2\":%d,\"n\":",
+                      type_key(e.type), e.color, e.out, e.ch + 1, e.cc, e.cc2, e.lo, e.hi, e.w, e.h, e.step, e.v, e.v2);
+        return b + forcehub::js(e.name) + ",\"lb\":" + forcehub::js(e.labels) + "}";
     }
     std::string json() const {
         std::string j = "{\"rev\":" + std::to_string(rev) + ",\"max_pages\":" + std::to_string(MAXPAGES) +
@@ -209,6 +218,20 @@ struct Kit {
             }
         }
         return j + "]}";
+    }
+    /* PICKER: the name of value VAL ("" = none): the k-th name belongs to MIN + k * STEP (towards MAX) */
+    static std::string label_for(const El &e, int val) {
+        if (e.labels.empty()) return "";
+        const int d = e.hi >= e.lo ? val - e.lo : e.lo - val;
+        if (d < 0 || d % e.step || (e.hi >= e.lo ? val > e.hi : val < e.hi)) return "";
+        int k = d / e.step;
+        size_t a = 0;
+        while (k-- > 0) { a = e.labels.find(',', a); if (a == std::string::npos) return ""; a++; }
+        const size_t z = e.labels.find(',', a);
+        std::string l = e.labels.substr(a, z == std::string::npos ? std::string::npos : z - a);
+        while (!l.empty() && l[0] == ' ') l.erase(0, 1);
+        while (!l.empty() && l.back() == ' ') l.pop_back();
+        return l;
     }
     int count() const { int n = 0; for (const Page &p : pages) n += (int)p.el.size(); return n; }
 
