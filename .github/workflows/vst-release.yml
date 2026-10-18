@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version, e.g. 0.9.0
+        description: Version, e.g. 0.10.0
         required: true
-        default: 0.9.0
+        default: 0.10.0
       dry_run:
         description: Build only (zip + skin previews as run artifacts), no draft release
         type: boolean
@@ -28,5 +28,5 @@ jobs:
       host_test: bash vst/test.sh
       plugin_id: ccmap
       license: MIT
-      about: MIDI controller mapper as an insert effect - Novation Launch Control (LEDs, pages), Evolution UC-33, Faderfox EC4 and OXI E16 (value feedback) or any USB controller; learn, 128 slots, 4 pages, pickup, relative encoders, CC/note/program/page targets on 4 own MIDI ports, 32 presets, phone view in the WLAN on the shared Force hub (play knobs/pads, download stems) and a Baukasten to build your own pages of faders, knobs, buttons, toggles, XY pads and pickers, each with its own CC and channel.
+      about: MIDI controller mapper as an insert effect - Novation Launch Control (LEDs, pages), Evolution UC-33, Faderfox EC4 and OXI E16 (value feedback) or any USB controller; learn, 128 slots, 4 pages, pickup, relative encoders, CC/note/program/page targets on 4 own MIDI ports, 32 presets, phone view in the WLAN on the shared Force hub (play knobs/pads, download stems) and a Baukasten to build your own pages of faders, knobs, buttons, toggles, XY pads, pickers and mixer channel strips, each with its own CC and channel.
       dry_run: ${{ inputs.dry_run }}
