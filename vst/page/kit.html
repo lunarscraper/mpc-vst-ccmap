@@ -99,6 +99,15 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
 .summary { font: 500 14px var(--mono); color: var(--hot); background: var(--bg); border-radius: 10px; padding: 10px 12px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row .btn { flex: 1 1 auto; }
+/* channel strip: fader above, mute key below */
+.el.strip .tg { display: none; }
+.el.strip .fz { position: absolute; left: 0; right: 0; top: 0; bottom: 54px; overflow: hidden; }
+.el.strip .unity { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--muted); opacity: .7; }
+.el.strip .unity span { position: absolute; left: 4px; top: -14px; font: 600 10px var(--mono); color: var(--muted); }
+.el.strip .mute { position: absolute; left: 6px; right: 6px; bottom: 6px; height: 42px; border-radius: 9px; border: 2px solid #555a63; display: flex; align-items: center; justify-content: center; font: 800 17px var(--sans); color: var(--muted); }
+.el.strip.muted .mute { background: #ffcf3d; border-color: #ffcf3d; color: #141414; box-shadow: 0 0 14px #ffcf3d88; }
+.el.strip.muted .fill { opacity: .22; }
+.el.strip .num { top: 26px; font-size: 13px; }
 /* picker tile */
 .el.pick .pv { position: absolute; left: 6px; right: 6px; top: 50%; transform: translateY(-38%); text-align: center; font: 800 26px/1.1 var(--sans); color: var(--k); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .el.pick .pv small { display: block; font: 600 12px var(--mono); color: var(--muted); margin-top: 2px; }
@@ -139,12 +148,14 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
     <button type="button" class="btn" id="pg-set">Seite einstellen</button>
     <button type="button" class="btn" id="pg-add">+ Seite</button>
     <button type="button" class="btn ghost" id="pg-import">Aus CC Map übernehmen</button>
+    <button type="button" class="btn ghost" id="pg-mixer">Mixer-Seite anlegen</button>
   </div>
   <div class="empty" id="empty" hidden>
     <strong>Noch keine Seite</strong>
-    <p>Lege eine Seite an und setze darauf Fader, Drehregler, Taster, Schalter oder XY-Pads. Jedes Element sendet seine eigene CC auf dem Kanal und Ausgang (Out A–D), den du einstellst.</p>
+    <p>Lege eine Seite an und setze darauf Fader, Drehregler, Taster, Schalter, XY-Pads, Picker oder Kanalzüge. Jedes Element sendet seine eigene CC auf dem Kanal und Ausgang (Out A–D), den du einstellst.</p>
     <div class="row"><button type="button" class="btn primary" id="em-add">+ Neue Seite</button>
-    <button type="button" class="btn" id="em-import">Aus CC Map übernehmen</button></div>
+    <button type="button" class="btn" id="em-import">Aus CC Map übernehmen</button>
+    <button type="button" class="btn" id="em-mixer">Mixer-Seite anlegen</button></div>
     <p>„Aus CC Map übernehmen“ macht aus den CC-Slots der aktiven CC-Map-Seite eine fertige Baukasten-Seite (mit Namen, Kanal und CC).</p>
   </div>
   <div class="grid" id="grid"></div>
@@ -165,15 +176,15 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
   </div>
   <div class="two">
     <div class="field"><span id="es-cc-l">CC</span><div class="step" data-for="es-cc"><button type="button" data-d="-1">−</button><input id="es-cc" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
-    <div class="field" id="es-cc2-f"><span>CC Y</span><div class="step" data-for="es-cc2"><button type="button" data-d="-1">−</button><input id="es-cc2" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
+    <div class="field" id="es-cc2-f"><span id="es-cc2-l">CC Y</span><div class="step" data-for="es-cc2"><button type="button" data-d="-1">−</button><input id="es-cc2" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
   </div>
   <div class="two">
     <div class="field"><span id="es-lo-l">Min</span><div class="step" data-for="es-lo"><button type="button" data-d="-1">−</button><input id="es-lo" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
     <div class="field"><span id="es-hi-l">Max</span><div class="step" data-for="es-hi"><button type="button" data-d="-1">−</button><input id="es-hi" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
   </div>
   <div class="two" id="es-pick-f">
-    <div class="field"><span>Schritt</span><div class="step" data-for="es-st"><button type="button" data-d="-1">−</button><input id="es-st" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
-    <div class="field"><span>Werte auf der Rolle</span><div class="summary" id="es-count" style="color:var(--fg)"></div></div>
+    <div class="field"><span id="es-st-l">Schritt</span><div class="step" data-for="es-st"><button type="button" data-d="-1">−</button><input id="es-st" inputmode="numeric" type="text"><button type="button" data-d="1">+</button></div></div>
+    <div class="field" id="es-count-f"><span>Werte auf der Rolle</span><div class="summary" id="es-count" style="color:var(--fg)"></div></div>
   </div>
   <label class="field" id="es-lb-f"><span>Namen der Werte (optional)</span><input type="text" id="es-lb" maxlength="600" autocomplete="off" placeholder="z. B. Sinus, Säge, Rechteck – leer = Zahlen"></label>
   <div class="two">
@@ -203,6 +214,25 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
   </div>
 </div>
 
+<div class="sheet" id="ms" hidden role="dialog" aria-labelledby="ms-title">
+  <h2 id="ms-title">Mixer-Seite anlegen</h2>
+  <div class="field"><span>Kanalzüge</span><div class="seg" id="ms-n"></div></div>
+  <div class="two">
+    <div class="field"><span>Ausgang</span><div class="seg" id="ms-out"></div></div>
+    <label class="field"><span>Kanal</span><select id="ms-ch"></select></label>
+  </div>
+  <div class="two">
+    <div class="field"><span>Volume ab CC</span><div class="step" data-for="ms-vcc"><button type="button" data-d="-1">−</button><input id="ms-vcc" inputmode="numeric" type="text" value="1"><button type="button" data-d="1">+</button></div></div>
+    <div class="field"><span>Mute ab CC</span><div class="step" data-for="ms-mcc"><button type="button" data-d="-1">−</button><input id="ms-mcc" inputmode="numeric" type="text" value="33"><button type="button" data-d="1">+</button></div></div>
+  </div>
+  <div class="two">
+    <div class="field"><span>Master-Kanalzug</span><div class="seg" id="ms-master"></div></div>
+    <div class="field"><span>0-dB-Wert</span><div class="step" data-for="ms-unity"><button type="button" data-d="-1">−</button><input id="ms-unity" inputmode="numeric" type="text" value="90"><button type="button" data-d="1">+</button></div></div>
+  </div>
+  <div class="summary" id="ms-sum"></div>
+  <div class="row"><button type="button" class="btn ghost" id="ms-cancel">Abbrechen</button><button type="button" class="btn primary" id="ms-ok">Anlegen</button></div>
+</div>
+
 <div class="roll" id="roll" hidden role="dialog" aria-labelledby="roll-title">
   <div class="roll-card" id="roll-card">
     <div class="roll-title" id="roll-title"></div>
@@ -218,8 +248,8 @@ h1 { font: 650 20px var(--sans); margin: 0; flex: 1; letter-spacing: .02em; }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const COLORS = ["#ff8a2a", "#ffc23d", "#7bd389", "#4fc3a1", "#5aa9ff", "#a98bff", "#ff6fae", "#ff5a4f"];
-const TYPES = [["fader", "Fader"], ["knob", "Drehregler"], ["button", "Taster"], ["toggle", "Schalter"], ["xy", "XY-Pad"], ["picker", "Picker"]];
-const SIZE = { fader: [1, 2], knob: [1, 2], button: [1, 1], toggle: [1, 1], xy: [2, 2], picker: [1, 1] };
+const TYPES = [["fader", "Fader"], ["knob", "Drehregler"], ["button", "Taster"], ["toggle", "Schalter"], ["xy", "XY-Pad"], ["picker", "Picker"], ["strip", "Kanalzug"]];
+const SIZE = { fader: [1, 2], knob: [1, 2], button: [1, 1], toggle: [1, 1], xy: [2, 2], picker: [1, 1], strip: [1, 3] };
 const OUTS = "ABCD";
 
 let kit = { rev: 0, pages: [], max_pages: 16, max_el: 48 };
@@ -254,8 +284,8 @@ const page = () => kit.pages[cur];
 
 /* ---- sending: one request in flight per element, the newest value waits (keeps the order) ---- */
 const q = new Map();
-function send(i, v, v2) {
-  const key = cur + ":" + i;
+function send(i, v, v2, lane) {
+  const key = cur + ":" + i + (lane || "");
   let s = q.get(key);
   if (!s) { s = { busy: false, next: null }; q.set(key, s); }
   s.next = { p: cur, i, v, v2 };
@@ -270,6 +300,12 @@ async function pump(s) {
   s.busy = false;
 }
 const scale = (e, v) => Math.max(0, Math.min(127, Math.round(e.lo + (e.hi - e.lo) * v / 127)));
+/* STRIP: the fader position whose value is its 0 dB value (STEP), -1 = none in MIN..MAX */
+function unityPos(e) {
+  if (!e.st || e.hi === e.lo) return -1;
+  const p = Math.round((e.st - e.lo) * 127 / (e.hi - e.lo));
+  return p < 0 || p > 127 ? -1 : p;
+}
 /* PICKER: its values MIN..MAX in steps of STEP, the k-th name belongs to the k-th value */
 function pickVals(e) {
   const out = [], st = Math.max(1, e.st || 1);
@@ -281,13 +317,14 @@ const pickNames = (e) => (e.lb ? e.lb.split(",").map((x) => x.trim()) : []);
 function pickLabel(e, v) { const k = pickVals(e).indexOf(v), L = pickNames(e); return k >= 0 && k < L.length ? L[k] : ""; }
 function showLast(e, i) {
   const n = e.n || defaultName(e, i);
+  if (e.t === "strip") { $("last").textContent = n + " · CC " + e.cc + " = " + scale(e, e.v < 0 ? 0 : e.v) + (e.v2 >= 64 ? " · MUTE" : "") + " · K" + e.ch + " · " + OUTS[e.o]; return; }
   if (e.t === "picker") { const l = pickLabel(e, e.v); $("last").textContent = n + " · CC " + e.cc + " = " + (l ? l + " (" + e.v + ")" : e.v) + " · K" + e.ch + " · " + OUTS[e.o]; return; }
   $("last").textContent = e.t === "xy"
     ? n + " · CC " + e.cc + " = " + scale(e, e.v) + " / CC " + e.cc2 + " = " + scale(e, e.v2) + " · K" + e.ch + " · " + OUTS[e.o]
     : n + " · CC " + e.cc + " = " + scale(e, e.v) + " · K" + e.ch + " · " + OUTS[e.o];
 }
 const defaultName = (e, i) => (TYPES.find((t) => t[0] === e.t) || ["", "Element"])[1] + " " + (i + 1);
-const target = (e) => (e.t === "xy" ? "CC" + e.cc + "/" + e.cc2 : "CC" + e.cc) + " K" + e.ch + " " + OUTS[e.o];
+const target = (e) => (e.t === "xy" || e.t === "strip" ? "CC" + e.cc + "/" + e.cc2 : "CC" + e.cc) + " K" + e.ch + " " + OUTS[e.o];
 
 /* ---- drawing ---- */
 function arc(f) {
@@ -304,6 +341,11 @@ function inner(e) {
   if (e.t === "fader") return '<div class="fill" style="height:' + f * 100 + '%"></div><div class="cap" style="bottom:calc(' + f * 100 + '% - 2px)"></div>';
   if (e.t === "knob") return arc(e.v < 0 ? 0 : f);
   if (e.t === "button" || e.t === "toggle") return '<div class="face"></div>';
+  if (e.t === "strip") {
+    const u = unityPos(e);
+    return '<div class="fz"><div class="fill" style="height:' + f * 100 + '%"></div><div class="cap" style="bottom:calc(' + f * 100 + '% - 2px)"></div>' +
+      (u >= 0 ? '<div class="unity" style="bottom:' + (u / 127 * 100) + '%"><span>0</span></div>' : "") + '</div><div class="mute">M</div>';
+  }
   if (e.t === "picker") {
     const l = e.v < 0 ? "" : pickLabel(e, e.v);
     /* the largest size at which the text fits the tile (a letter is about 0.62 of the font size wide) */
@@ -320,6 +362,7 @@ function numText(e) {
   if (e.t === "xy") return scale(e, e.v) + "/" + (e.v2 < 0 ? "–" : scale(e, e.v2));
   if (e.t === "button" || e.t === "toggle") return e.v >= 64 ? "AN" : "AUS";
   if (e.t === "picker") return String(e.v);
+  if (e.t === "strip" && e.st && scale(e, e.v) === e.st) return "0 dB";
   return String(scale(e, e.v));
 }
 function paint(el, e) {
@@ -327,6 +370,7 @@ function paint(el, e) {
   el.querySelector(".num").textContent = numText(e);
   el.classList.toggle("unknown", e.v < 0);
   el.classList.toggle("on", (e.t === "button" || e.t === "toggle") && e.v >= 64);
+  el.classList.toggle("muted", e.t === "strip" && e.v2 >= 64);
 }
 function render() {
   const pg = page();
@@ -339,14 +383,14 @@ function render() {
   g.style.gridTemplateColumns = "repeat(" + pg.cols + ", minmax(0, 1fr))";
   sizeRows();
   g.innerHTML = pg.el.map((e, i) =>
-    '<div class="el' + (e.t === "button" || e.t === "toggle" ? " press" : "") + (e.t === "picker" ? " pick" : "") + (e.h === 1 ? " short" : "") + '" data-i="' + i + '" style="--k:' + COLORS[e.c] +
+    '<div class="el' + (e.t === "button" || e.t === "toggle" ? " press" : "") + (e.t === "picker" ? " pick" : "") + (e.t === "strip" ? " strip" : "") + (e.h === 1 ? " short" : "") + '" data-i="' + i + '" style="--k:' + COLORS[e.c] +
     ";grid-column:span " + Math.min(e.w, pg.cols) + ";grid-row:span " + e.h + '">' +
     '<div class="body"></div><div class="lbl">' + esc(e.n || defaultName(e, i)) + '</div><div class="num"></div><div class="tg">' + esc(target(e)) + "</div></div>").join("") +
     (editMode ? '<button type="button" class="add" id="add-el">+ Element</button>' : "");
   g.querySelectorAll(".el").forEach((el) => paint(el, pg.el[+el.dataset.i]));
   $("hint").textContent = editMode
     ? "Element antippen zum Einstellen. „Fertig“ oben schaltet zurück zum Spielen."
-    : pg.el.length ? "Fader: Position antippen oder ziehen · Drehregler: auf- und abwischen · XY: im Feld ziehen · Picker: antippen und die Rolle drehen."
+    : pg.el.length ? "Fader: Position antippen oder ziehen · Drehregler: auf- und abwischen · XY: im Feld ziehen · Picker: antippen und die Rolle drehen · Kanalzug: Fader wischen, Doppeltipp = 0 dB, M = Mute."
                    : "Diese Seite ist leer. Oben „Bearbeiten“ tippen und Elemente hinzufügen.";
 }
 function sizeRows() {
@@ -387,12 +431,24 @@ $("grid").addEventListener("pointerdown", (ev) => {
   else if (e.t === "toggle") { e.v = e.v >= 64 ? 0 : 127; send(i, e.v); paint(el, e); showLast(e, i); }
   else if (e.t === "fader" || e.t === "xy") apply(d, posValue(el, ev, e));
   else if (e.t === "picker") d.x0 = ev.clientX;
+  else if (e.t === "strip") {
+    if (ev.target.closest(".mute")) {   /* mute key: switches on every tap */
+      d.mute = true;
+      e.v2 = e.v2 >= 64 ? 0 : 127;
+      send(i, -1, e.v2, ":m"); paint(el, e); showLast(e, i);
+    } else {   /* fader: wiped (no jump on touch); a double tap goes to 0 dB */
+      const now = Date.now();
+      if (now - (el._tap || 0) < 320 && e.st) { el._tap = 0; const u = unityPos(e); if (u >= 0) { e.v = u; send(i, u); paint(el, e); showLast(e, i); } d.mute = true; }
+      else { el._tap = now; d.v0 = e.v < 0 ? Math.max(0, unityPos(e)) : e.v; d.h = el.querySelector(".fz").getBoundingClientRect().height || 150; }
+    }
+  }
 });
 $("grid").addEventListener("pointermove", (ev) => {
   const d = drags.get(ev.pointerId);
   if (!d) return;
   const e = d.e;
   if (e.t === "fader" || e.t === "xy") apply(d, posValue(d.el, ev, e));
+  else if (e.t === "strip" && !d.mute) apply(d, [Math.max(0, Math.min(127, Math.round(d.v0 + (d.y0 - ev.clientY) * 127 / d.h)))]);
   else if (e.t === "knob") apply(d, [Math.max(0, Math.min(127, Math.round(d.v0 + (d.y0 - ev.clientY) * 127 / 200)))]);   /* 200 px = full range */
 });
 function endTouch(ev) {
@@ -514,7 +570,7 @@ $("edit").addEventListener("click", () => {
 
 /* ---- sheets ---- */
 function openSheet(id) { $("scrim").hidden = false; $(id).hidden = false; sheetOpen = true; }
-function closeSheets() { $("scrim").hidden = true; $("es").hidden = true; $("ps").hidden = true; sheetOpen = false; }
+function closeSheets() { $("scrim").hidden = true; $("es").hidden = true; $("ps").hidden = true; $("ms").hidden = true; sheetOpen = false; }
 $("scrim").addEventListener("click", closeSheets);
 function seg(box, items, val, onPick) {
   box.innerHTML = items.map(([v, t]) => '<button type="button" data-v="' + v + '" aria-pressed="' + (String(v) === String(val)) + '">' + t + "</button>").join("");
@@ -544,12 +600,15 @@ let ed = null;   /* { i: index or -1, e: working copy } */
 let lastPicked = { t: "fader", c: 0, o: 0, ch: 1 };
 function editorType(t) {
   ed.e.t = t;
-  const xy = t === "xy", pressy = t === "button" || t === "toggle", pick = t === "picker";
-  $("es-cc2-f").style.visibility = xy ? "visible" : "hidden";
-  $("es-cc-l").textContent = xy ? "CC X" : "CC";
+  const xy = t === "xy", pressy = t === "button" || t === "toggle", pick = t === "picker", strip = t === "strip";
+  $("es-cc2-f").style.visibility = xy || strip ? "visible" : "hidden";
+  $("es-cc-l").textContent = xy ? "CC X" : strip ? "CC Volume" : "CC";
+  $("es-cc2-l").textContent = strip ? "CC Mute" : "CC Y";
+  $("es-st-l").textContent = strip ? "0-dB-Wert (Doppeltipp)" : "Schritt";
+  $("es-count-f").style.visibility = pick ? "visible" : "hidden";
   $("es-lo-l").textContent = pressy ? "Wert AUS" : pick ? "Erster Wert" : "Min";
   $("es-hi-l").textContent = pressy ? "Wert AN" : pick ? "Letzter Wert" : "Max";
-  $("es-pick-f").hidden = !pick;
+  $("es-pick-f").hidden = !pick && !strip;
   $("es-lb-f").hidden = !pick;
 }
 function openEditor(i) {
@@ -557,14 +616,15 @@ function openEditor(i) {
   let e;
   if (i >= 0) e = Object.assign({}, pg.el[i]);
   else {
-    const used = pg.el.map((x) => Math.max(x.cc, x.t === "xy" ? x.cc2 : 0));
+    const used = pg.el.map((x) => (x.t === "xy" ? Math.max(x.cc, x.cc2) : x.cc));
     const cc = used.length ? Math.min(127, Math.max.apply(null, used) + 1) : 1;
     const t = lastPicked.t;
     e = { t, n: "", c: lastPicked.c, o: lastPicked.o, ch: lastPicked.ch, cc, cc2: Math.min(127, cc + 1), lo: 0, hi: 127, w: SIZE[t][0], h: SIZE[t][1], st: 1, lb: "", v: -1, v2: -1 };
   }
   ed = { i, e };
   $("es-title").textContent = i >= 0 ? "Element " + (i + 1) + " einstellen" : "Neues Element";
-  seg($("es-type"), TYPES, e.t, (t) => { editorType(t); seg($("es-w"), range(1, pg.cols).map((n) => [n, n]), Math.min(SIZE[t][0], pg.cols), summary);
+  seg($("es-type"), TYPES, e.t, (t) => { editorType(t);
+    if (t === "strip") { if (+$("es-st").value <= 1) $("es-st").value = 90; $("es-cc2").value = Math.min(127, +$("es-cc").value + 32); } seg($("es-w"), range(1, pg.cols).map((n) => [n, n]), Math.min(SIZE[t][0], pg.cols), summary);
     seg($("es-h"), range(1, 4).map((n) => [n, n]), SIZE[t][1], summary); summary(); });
   $("es-name").value = e.n;
   $("es-color").innerHTML = COLORS.map((c, k) => '<button type="button" data-v="' + k + '" aria-label="Farbe ' + (k + 1) + '" aria-pressed="' + (k === e.c) + '" style="background:' + c + '"></button>').join("");
@@ -572,7 +632,7 @@ function openEditor(i) {
   seg($("es-out"), [0, 1, 2, 3].map((o) => [o, OUTS[o]]), e.o, summary);
   $("es-ch").value = e.ch;
   $("es-cc").value = e.cc; $("es-cc2").value = e.cc2; $("es-lo").value = e.lo; $("es-hi").value = e.hi;
-  $("es-st").value = e.st || 1; $("es-lb").value = e.lb || "";
+  $("es-st").value = e.st || (e.t === "strip" ? 90 : 1); $("es-lb").value = e.lb || "";
   seg($("es-w"), range(1, pg.cols).map((n) => [n, n]), Math.min(e.w, pg.cols), summary);
   seg($("es-h"), range(1, 4).map((n) => [n, n]), e.h, summary);
   editorType(e.t);
@@ -604,6 +664,7 @@ function summary() {
   if (e.t === "xy") s = "X sendet CC " + e.cc + ", Y sendet CC " + e.cc2 + " (" + e.lo + "–" + e.hi + ") über " + out;
   else if (e.t === "button") s = "Gedrückt CC " + e.cc + " = " + e.hi + ", losgelassen = " + e.lo + " · " + out;
   else if (e.t === "toggle") s = "Jeder Tipp schaltet CC " + e.cc + " zwischen " + e.lo + " und " + e.hi + " · " + out;
+  else if (e.t === "strip") s = "Fader sendet CC " + e.cc + " (" + e.lo + "–" + e.hi + "), Doppeltipp = " + e.st + " (0 dB), Mute sendet CC " + e.cc2 + " = 127 / 0 · " + out;
   else if (e.t === "picker") {
     const vals = pickVals(e), names = pickNames(e);
     $("es-count").textContent = vals.length + (vals.length === 1 ? " Wert" : " Werte");
@@ -613,8 +674,8 @@ function summary() {
       (names.length && names.length < vals.length ? " · Werte ohne Namen zeigen die Zahl" : "");
   }
   else s = "Sendet CC " + e.cc + " (" + e.lo + "–" + e.hi + (e.lo > e.hi ? ", umgekehrt" : "") + ") über " + out;
-  const mine = e.t === "xy" ? [e.cc, e.cc2] : [e.cc];
-  const pg = page(), clash = pg.el.some((x, k) => k !== ed.i && x.o === e.o && x.ch === e.ch && (x.t === "xy" ? [x.cc, x.cc2] : [x.cc]).some((c) => mine.includes(c)));
+  const two = (x) => x.t === "xy" || x.t === "strip", mine = two(e) ? [e.cc, e.cc2] : [e.cc];
+  const pg = page(), clash = pg.el.some((x, k) => k !== ed.i && x.o === e.o && x.ch === e.ch && (two(x) ? [x.cc, x.cc2] : [x.cc]).some((c) => mine.includes(c)));
   $("es-sum").textContent = s + (clash ? " · Achtung: diese CC nutzt schon ein anderes Element dieser Seite" : "");
 }
 function elQuery(e) {
@@ -679,6 +740,57 @@ $("pg-add").addEventListener("click", addPage);
 $("em-add").addEventListener("click", addPage);
 $("pg-import").addEventListener("click", importPage);
 $("em-import").addEventListener("click", importPage);
+
+/* ---- mixer page: one channel strip per track (the Force learns them with MIDI Learn) ---- */
+function openMixer() {
+  if (kit.pages.length >= kit.max_pages) { toast("Maximal 16 Seiten."); return; }
+  seg($("ms-n"), [4, 8, 12, 16].map((n) => [n, n]), 8, mixSum);
+  seg($("ms-out"), [0, 1, 2, 3].map((o) => [o, OUTS[o]]), 3, mixSum);
+  seg($("ms-master"), [[1, "Ja"], [0, "Nein"]], 1, mixSum);
+  $("ms-ch").innerHTML = range(1, 16).map((c) => '<option value="' + c + '">Kanal ' + c + "</option>").join("");
+  $("ms-ch").value = 16;
+  mixSum();
+  openSheet("ms");
+}
+function mixRead() {
+  return { n: +segVal($("ms-n")), o: +segVal($("ms-out")), ch: +$("ms-ch").value, master: segVal($("ms-master")) === "1",
+    vcc: clampNum(parseInt($("ms-vcc").value, 10), 0, 127), mcc: clampNum(parseInt($("ms-mcc").value, 10), 0, 127),
+    unity: clampNum(parseInt($("ms-unity").value, 10), 1, 127) };
+}
+function mixSum() {
+  const m = mixRead(), k = m.n + (m.master ? 1 : 0), vl = m.vcc + k - 1, ml = m.mcc + k - 1;
+  let s = k + " Kanalzüge über Out " + OUTS[m.o] + ", Kanal " + m.ch + ": Volume CC " + m.vcc + "–" + vl + ", Mute CC " + m.mcc + "–" + ml +
+    (m.master ? " (der letzte ist Master)" : "") + ". Danach auf der Force jede Spur einmal per MIDI Learn zuweisen.";
+  if (vl > 127 || ml > 127) s = "Zu viele Kanalzüge für diese Start-CC (über 127).";
+  else if (!(vl < m.mcc || ml < m.vcc)) s = "Achtung: Volume- und Mute-CCs überschneiden sich.";
+  $("ms-sum").textContent = s;
+  $("ms-ok").disabled = vl > 127 || ml > 127 || !(vl < m.mcc || ml < m.vcc);
+}
+["ms-vcc", "ms-mcc", "ms-unity"].forEach((id) => $(id).addEventListener("input", mixSum));
+$("ms-ch").addEventListener("change", mixSum);
+document.querySelectorAll("#ms .step").forEach((s) => s.addEventListener("click", mixSum));
+$("ms-cancel").addEventListener("click", closeSheets);
+$("ms-ok").addEventListener("click", async () => {
+  const m = mixRead(), k = m.n + (m.master ? 1 : 0);
+  $("ms-ok").disabled = true;
+  let j = await api("/page?op=add&name=Mixer&cols=" + (innerWidth >= 700 ? Math.min(8, k) : 4));
+  if (!j) { $("ms-ok").disabled = false; return; }
+  const p = j.pages.length - 1;
+  for (let t = 0; t < k; t++) {
+    const master = m.master && t === k - 1;
+    const e = { t: "strip", n: master ? "Master" : "Spur " + (t + 1), c: master ? 7 : t % 7, o: m.o, ch: m.ch, cc: m.vcc + t, cc2: m.mcc + t,
+      lo: 0, hi: 127, w: 1, h: 3, st: m.unity, lb: "" };
+    const r = await api("/el?op=put&p=" + p + "&i=-1" + elQuery(e));
+    if (r) j = r;
+  }
+  $("ms-ok").disabled = false;
+  closeSheets();
+  cur = p;
+  setKit(j);
+  toast("Mixer-Seite angelegt. Jetzt auf der Force per MIDI Learn zuweisen.");
+});
+$("pg-mixer").addEventListener("click", openMixer);
+$("em-mixer").addEventListener("click", openMixer);
 
 (async () => { setKit(await api("/kit")); poll(); })();
 </script>

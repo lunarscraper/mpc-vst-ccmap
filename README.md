@@ -6,7 +6,7 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.9.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.10.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
@@ -16,6 +16,7 @@ Control und UC-33 übernehmen per Pickup.
 0.7.1: Werk-Preset „LC > DRUMGEN (CH 15)“ für DrumGen / DrumGen FX.
 0.8.0: **Baukasten** – eigene Seiten mit Fadern, Drehreglern, Tastern, Schaltern und XY-Pads auf dem Handy/iPad bauen, jede mit eigener CC, eigenem Kanal und Ausgang (eigene Kachel im Hub).
 0.9.0: Baukasten-Element **Picker** – zeigt einen Wert, antippen öffnet eine Rolle zum Drehen, optional mit Namen für die Werte.
+0.10.0: Baukasten-Element **Kanalzug** (Fader + Mute für den Mixer der Force per MIDI Learn), Knopf „Mixer-Seite anlegen“, Rückkanal-Port **CC Map Return**.
 Projekte und Presets älterer Versionen laden weiter.
 
 ## Warum ein Insert-Effekt
@@ -230,6 +231,7 @@ Kanal** über einen der Ausgänge **Out A–D** von CC Map (mit LINK A also auch
 | Taster | gedrückt = MAX, losgelassen = MIN |
 | Schalter | jeder Tipp schaltet zwischen MIN und MAX |
 | XY-Pad | im Feld ziehen: X sendet CC, Y sendet CC Y |
+| Kanalzug | Fader auf- und abwischen (springt beim Antippen nicht), **Doppeltipp = 0 dB**, Taste **M** = Mute an/aus (sendet CC Mute = 127 / 0) |
 | Picker | zeigt den aktuellen Wert; antippen öffnet eine **Rolle**: nach oben/unten wischen, der Wert im Rahmen wird sofort gesendet. ▲/▼ gehen einen Wert weiter, ein Wert antippen springt hin, „Fertig“ oder daneben tippen schließt |
 
 **Bauen:** Oben „Bearbeiten“ tippen. „+ Seite“ legt eine Seite an (Handy 4 Spalten, iPad 8), „+ Element“
@@ -261,6 +263,23 @@ Drehregler, alles andere Fader). NOTE-, PROGRAM- und PAGE-Slots werden überspru
 
 Programmierschnittstelle (alles GET, Antwort JSON): `/kit`, `/vals?p=`, `/send?p=&i=&v=[&v2=]`,
 `/page?op=add|set|del|move`, `/el?op=put|del|move|dup` (Picker: `st=` Schritt, `lb=` Namen), `/import` – Einzelheiten in `ccmap_vst.cpp` bei `kit_route`.
+
+### Mixer der Force steuern (Kanalzüge)
+
+Die Force lernt die Kanalzüge mit ihrem eigenen **MIDI Learn** (auf der Force getestet: Volume und Mute einer Spur).
+
+1. Im Baukasten „Bearbeiten“ → **„Mixer-Seite anlegen“**: Anzahl der Kanalzüge (4–16), Ausgang (Vorschlag **Out D**),
+   Kanal (Vorschlag 16), Volume ab CC 1, Mute ab CC 33, optional ein Master-Kanalzug, 0-dB-Wert (auf der Force
+   gemessen: **90**). Spur n bekommt dann Volume = CC n, Mute = CC 32 + n.
+2. Auf der Force *Preferences → MIDI*: bei **CC Map Out D** **CONTROL** einschalten, **TRACK aus** (sonst landen die
+   Mixer-CCs zusätzlich als Noten-/CC-Daten auf Spuren, die Out D hören).
+3. MIDI Learn der Force: Quelle *Track → Spur*, Ziel *Volume*, dann **nur** den passenden Fader am Handy bewegen
+   (die Force nimmt die zuletzt eingegangene CC). Dasselbe mit *Mute* und der Taste M.
+
+**Rückkanal „CC Map Return“:** ein MIDI-Ausgang der Force. Jede CC, die dort ankommt, bewegt alle Baukasten-Elemente
+mit demselben Kanal und derselben CC nach (ohne selbst etwas zu senden). Ob die Force Änderungen an
+MIDI-Learn-Zielen dorthin zurückmeldet, hängt von der Force ab; ohne Rückmeldung zeigt das Handy weiter die
+eigene letzte Stellung. Der Kanalzug-Fader springt beim Antippen nicht, er wird von seiner Stellung aus gewischt.
 
 ## OXI E16
 

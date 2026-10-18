@@ -9,6 +9,8 @@
  *   BUTTON  MAX while held, MIN on release
  *   TOGGLE  every tap switches MIN / MAX
  *   XY      a square pad: X = CC, Y = CC 2
+ *   STRIP   channel strip for the Force's mixer (learned there with MIDI Learn): fader = CC (MIN..MAX), mute key =
+ *           CC 2 (127 muted / 0), double tap on the fader = STEP (its 0 dB value)
  *   PICKER  shows its value; a tap opens a roll to turn up / down: the values MIN..MAX in steps of STEP,
  *           optionally with names ("Saw,Square,Noise"); sends the chosen value itself
  *
@@ -30,7 +32,7 @@
 
 namespace cckit {
 
-enum Type { T_FADER = 0, T_KNOB = 1, T_BUTTON = 2, T_TOGGLE = 3, T_XY = 4, T_PICKER = 5, NTYPES = 6 };
+enum Type { T_FADER = 0, T_KNOB = 1, T_BUTTON = 2, T_TOGGLE = 3, T_XY = 4, T_PICKER = 5, T_STRIP = 6, NTYPES = 7 };
 enum { MAXPAGES = 16, MAXEL = 48, NCOLORS = 8, NAMELEN = 24, LABELSLEN = 600 };
 
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -63,7 +65,7 @@ struct El {
     int cc = 1, cc2 = 2;      /* cc2: Y of an XY pad */
     int lo = 0, hi = 127;     /* MIN > MAX inverts */
     int w = 1, h = 2;
-    int step = 1;             /* PICKER: distance between two values */
+    int step = 1;             /* PICKER: distance between two values; STRIP: the 0 dB value (double tap) */
     std::string labels;       /* PICKER: names of the values from MIN on, comma separated, may be empty */
     /* runtime */
     int v = -1, v2 = -1;      /* position 0..127 of the control (before MIN..MAX), -1 = unknown */
@@ -76,7 +78,7 @@ struct Page {
 };
 
 static inline const char *type_key(int t) {
-    static const char *const K[NTYPES] = {"fader", "knob", "button", "toggle", "xy", "picker"};
+    static const char *const K[NTYPES] = {"fader", "knob", "button", "toggle", "xy", "picker", "strip"};
     return K[clampi(t, 0, NTYPES - 1)];
 }
 
@@ -111,6 +113,18 @@ struct Kit {
     static int scale(const El &e, int v) { return clampi((int)std::lround(e.lo + (e.hi - e.lo) * (clampi(v, 0, 127) / 127.0)), 0, 127); }
     template <class Emit> static bool send(El &e, int v, int v2, Emit emit) {
         bool any = false;
+        if (e.type == T_STRIP) {   /* channel strip: v = fader (MIN..MAX on CC), v2 = mute (127 / 0 on CC 2); < 0 = leave alone */
+            if (v >= 0) {
+                e.v = clampi(v, 0, 127);
+                const int s = scale(e, e.v);
+                if (s != e.last) { emit(e.out, 0xB0 | e.ch, e.cc, s); e.last = s; any = true; }
+            }
+            if (v2 >= 0) {
+                e.v2 = v2 >= 64 ? 127 : 0;
+                emit(e.out, 0xB0 | e.ch, e.cc2, e.v2); e.last2 = e.v2; any = true;
+            }
+            return any;
+        }
         v = clampi(v, 0, 127);
         e.v = v;
         const int s = e.type == T_PICKER ? v : scale(e, v);   /* a picker sends the chosen value itself */
@@ -232,6 +246,34 @@ struct Kit {
         while (!l.empty() && l[0] == ' ') l.erase(0, 1);
         while (!l.empty() && l.back() == ' ') l.pop_back();
         return l;
+    }
+    /* RETURN: a CC came back (e.g. the Force reports a mixer move): every element on that channel and CC follows,
+     * without sending anything. Returns how many elements moved. */
+    static int inv(const El &e, int val) {
+        if (e.hi == e.lo) return 0;
+        return clampi((int)std::lround((val - e.lo) * 127.0 / (e.hi - e.lo)), 0, 127);
+    }
+    int feedback(int ch, int cc, int val) {
+        int n = 0;
+        val = clampi(val, 0, 127);
+        for (Page &p : pages)
+            for (El &e : p.el) {
+                if (e.ch != ch) continue;
+                if (e.type == T_STRIP) {
+                    if (e.cc == cc) { e.v = inv(e, val); e.last = val; n++; }
+                    if (e.cc2 == cc) { e.v2 = val >= 64 ? 127 : 0; e.last2 = e.v2; n++; }
+                } else if (e.type == T_XY) {
+                    if (e.cc == cc) { e.v = inv(e, val); e.last = val; n++; }
+                    if (e.cc2 == cc) { e.v2 = inv(e, val); e.last2 = val; n++; }
+                } else if (e.cc == cc) {
+                    if (e.type == T_PICKER) e.v = val;
+                    else if (e.type == T_BUTTON || e.type == T_TOGGLE) e.v = std::abs(val - e.hi) <= std::abs(val - e.lo) ? 127 : 0;
+                    else e.v = inv(e, val);
+                    e.last = val;
+                    n++;
+                }
+            }
+        return n;
     }
     int count() const { int n = 0; for (const Page &p : pages) n += (int)p.el.size(); return n; }
 

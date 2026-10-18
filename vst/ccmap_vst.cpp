@@ -98,7 +98,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.9.0"
+#define BUILD_ID "ccmap-0.10.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -151,6 +151,7 @@ struct Plugin {
 #ifndef NO_ALSA
     snd_seq_t *seq = nullptr;
     int in_port = -1, led_port = -1, out_port[NOUTS] = {-1, -1, -1, -1};
+    int ret_port = -1;                   /* "CC Map Return": CCs coming back move the BAUKASTEN elements */
     int wake[2] = {-1, -1};
     std::thread thr;
     std::atomic<bool> running{false};
@@ -587,7 +588,12 @@ static void leds_update(Plugin *w, const uint8_t v[NLEDS], int tmpl) {
         w->led_sent[i] = v[i];
     }
 }
+static void kit_return(Plugin *w, int ch, int cc, int val);
 static void handle(Plugin *w, snd_seq_event_t *ev) {
+    if (w->ret_port >= 0 && ev->dest.client == snd_seq_client_id(w->seq) && ev->dest.port == w->ret_port) {
+        if (ev->type == SND_SEQ_EVENT_CONTROLLER) kit_return(w, ev->data.control.channel, (int)ev->data.control.param, ev->data.control.value);
+        return;
+    }
     switch (ev->type) {
     case SND_SEQ_EVENT_PORT_START:
         subscribe(w, ev->data.addr.client, ev->data.addr.port);
@@ -697,6 +703,9 @@ static void alsa_open(Plugin *w) {
     for (int i = 0; i < NOUTS; i++)
         w->out_port[i] = snd_seq_create_simple_port(w->seq, NAMES[i], SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ,
                                                     SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
+    /* back channel: whoever sends here (the Force as a MIDI output, another plugin) moves the kit's elements */
+    w->ret_port = snd_seq_create_simple_port(w->seq, "Return", SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
+                                             SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
     LOG("[ccmap_vst] ALSA client '" PLUG_NAME "' (%d), out ports %d..%d\n", snd_seq_client_id(w->seq), w->out_port[0], w->out_port[3]);
     if (w->in_port < 0 || w->out_port[0] < 0) { LOG("[ccmap_vst] port creation failed\n"); return; }
     /* hot-plug: the system announce port tells us about ports that appear later */
@@ -774,6 +783,19 @@ extern "C" __attribute__((visibility("default"))) int ccmap_test_flash(AEffect *
     w->mp.flash_req = false;
     w->mp.leds(v, true);
     return r;
+}
+#endif
+
+/* ---- RETURN: a CC on "CC Map Return" moves the kit's elements (the page polls their positions) ---- */
+static std::atomic<long> g_ret_count{0};
+static void kit_return(Plugin *w, int ch, int cc, int val) {
+    int n;
+    { std::lock_guard<std::mutex> lk(w->mu); n = w->kit.feedback(ch, cc, val); }
+    if (g_ret_count++ < 20) LOG("[ccmap_vst] return: ch %d cc %d = %d -> %d kit elements\n", ch + 1, cc, val, n);
+}
+#ifdef NO_ALSA
+extern "C" __attribute__((visibility("default"))) void ccmap_test_return(AEffect *e, int ch, int cc, int val) {
+    kit_return((Plugin *)e->object, ch, cc, val);
 }
 #endif
 
@@ -876,9 +898,9 @@ static bool kit_write(const std::string &text) {
  *   GET /vals?p=P                         positions of page P (polled while playing)
  *   GET /send?p=P&i=I&v=V[&v2=V2]         element I of page P to position V (XY: V2 = Y), 0..127
  *   GET /page?op=add|set|del|move&p=P&name=N&cols=C&dir=-1|1
- *   GET /el?op=put|del|move|dup&p=P&i=I (put with i=-1: new) &t=fader|knob|button|toggle|xy|picker&n=Name
+ *   GET /el?op=put|del|move|dup&p=P&i=I (put with i=-1: new) &t=fader|knob|button|toggle|xy|picker|strip&n=Name
  *           &c=colour&o=0..3&ch=1..16&cc=&cc2=&lo=&hi=&w=&h=&st=step&lb=labels,comma,separated&dir=-1|1
- *   (/send for a PICKER: V is the value to send itself, not a position)
+ *   (/send for a PICKER: V is the value to send itself, not a position; for a STRIP: V = fader, V2 = mute, -1 = unchanged)
  *   GET /import                           a new page from the CC Map slots of the active page
  * Edits answer with the whole kit (like /kit) and are saved to the SD card at once. */
 /* whether the query has KEY= as a whole key (forcehub's Request::has() also matches "cc=" for "c") */
@@ -904,7 +926,9 @@ static int kit_route(Plugin *w, int c, const forcehub::Request &r) {
                 El &e = k.pages[p].el[i];
                 cckit::Kit::send(e, r.num("v"), r.num("v2", -1), [w](int port, int st, int d1, int d2) { w->mp.emit(port, st, d1, d2); });
                 const std::string nm = e.name.empty() ? "KIT CC " + std::to_string(e.cc) : e.name;
-                if (e.type == cckit::T_XY) std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %d / %d", nm.c_str(), e.last, e.last2);
+                if (e.type == cckit::T_STRIP && r.num("v", -1) < 0)
+                    std::snprintf(w->mp.last, sizeof w->mp.last, "%s MUTE %s", nm.c_str(), e.v2 >= 64 ? "ON" : "OFF");
+                else if (e.type == cckit::T_XY) std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %d / %d", nm.c_str(), e.last, e.last2);
                 else if (e.type == cckit::T_PICKER && !cckit::Kit::label_for(e, e.last).empty())
                     std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %s (%d)", nm.c_str(), cckit::Kit::label_for(e, e.last).c_str(), e.last);
                 else std::snprintf(w->mp.last, sizeof w->mp.last, "%s = %d", nm.c_str(), e.last);

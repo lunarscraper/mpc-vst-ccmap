@@ -841,6 +841,30 @@ int main(int argc, char **argv) {
         CHECK(display(e, "Last") == "Wave = 40", "a value without a name: '%s'", display(e, "Last").c_str());
         CHECK(kget("/el?op=put&p=0&i=3&st=0").find("\"st\":1") != std::string::npos, "step at least 1");
         kget("/el?op=put&p=0&i=3&st=16");
+        /* 0.10.0: channel strip (fader + mute) and the RETURN port */
+        j = kget("/el?op=put&p=0&i=-1&t=strip&n=Spur%201&o=3&ch=16&cc=1&cc2=33&st=90&h=3");
+        CHECK(j.find("\"t\":\"strip\"") != std::string::npos && j.find("\"st\":90") != std::string::npos, "strip added");
+        const std::string sk = "4";   /* Cutoff, Cutoff, Filter XY, Wave, Spur 1 */
+        take(e);
+        kget("/send?p=0&i=" + sk + "&v=90");
+        o = take(e);
+        CHECK(is(o, 3, 0xBF, 1, 90), "strip fader -> Out D ch 16 CC 1 = 90: %s", dump(o).c_str());
+        kget("/send?p=0&i=" + sk + "&v=-1&v2=127");
+        o = take(e);
+        CHECK(is(o, 3, 0xBF, 33, 127), "strip mute on, fader untouched: %s", dump(o).c_str());
+        CHECK(display(e, "Last") == "Spur 1 MUTE ON", "mute on the Force: '%s'", display(e, "Last").c_str());
+        kget("/send?p=0&i=" + sk + "&v=-1&v2=0");
+        o = take(e);
+        CHECK(is(o, 3, 0xBF, 33, 0), "strip mute off: %s", dump(o).c_str());
+        typedef void (*ret_fn)(AEffect *, int, int, int);
+        ret_fn t_ret = (ret_fn)dlsym(lib, "ccmap_test_return");
+        CHECK(t_ret != nullptr, "return hook");
+        if (t_ret) {
+            t_ret(e, 15, 1, 64); t_ret(e, 15, 33, 127); t_ret(e, 4, 74, 0);
+            CHECK(take(e).empty(), "a returned CC sends nothing");
+            const std::string vv = kget("/vals?p=0");
+            CHECK(vv.find("[64,127]") != std::string::npos && vv.find("[0,-1],[0,-1]") != std::string::npos, "returned values move the elements: %s", vv.c_str());
+        }
         /* umlauts and separators in names, a second page, page order */
         kget("/page?op=add&name=Gr%C3%BC%C3%9Fe%09%0Atab&cols=12");
         j = kget("/kit");
