@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version, e.g. 0.11.0
+        description: Version, e.g. 0.11.2
         required: true
-        default: 0.11.0
+        default: 0.11.2
       dry_run:
         description: Build only (zip + skin previews as run artifacts), no draft release
         type: boolean
