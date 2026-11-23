@@ -375,6 +375,22 @@ int main(int argc, char **argv) {
     CHECK(display(e, "Slot").rfind("1 ", 0) == 0, "echo keeps slot 1: '%s'", display(e, "Slot").c_str());
     g_echo = false;
 
+    /* 0.11.2: MPC OS 3.10 holds a button as a toggle (1 on one tap, 0 on the next): every tap counts */
+    {
+        const int li = param(e, "Learn");
+        set(e, "Slot", 9);
+        e->setParameter(e, li, 1.0f);
+        CHECK(display(e, "Source") == "MOVE A CONTROL ...", "toggle host, tap 1 arms: '%s'", display(e, "Source").c_str());
+        usleep(700000);
+        e->setParameter(e, li, 0.0f);
+        CHECK(display(e, "Source") != "MOVE A CONTROL ...", "toggle host, tap 2 cancels: '%s'", display(e, "Source").c_str());
+        usleep(700000);
+        e->setParameter(e, li, 1.0f); e->setParameter(e, li, 0.0f);   /* a normal tap: the release doesn't fire */
+        CHECK(display(e, "Source") == "MOVE A CONTROL ...", "normal tap arms once: '%s'", display(e, "Source").c_str());
+        press(e, "Learn");
+        CHECK(display(e, "Source") != "MOVE A CONTROL ...", "second tap cancels: '%s'", display(e, "Source").c_str());
+    }
+
     /* ---- chunk: a new instance gets the same map ---- */
     void *ck = nullptr;
     intptr_t n = e->dispatcher(e, 23, 0, 0, &ck, 0);

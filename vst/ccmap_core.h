@@ -63,7 +63,7 @@ struct Map {
     int16_t val = -1;               /* where the control stands, 0..127; -1 = not known yet */
     char name[24] = "";             /* label the user gave the slot (phone view), "" = none */
     /* EC4 display (0.11.0): which encoder shows the slot's name and in which EC4 group */
-    uint8_t cell = 0;               /* 0 = from the CC number (CC 1..16 = encoder 1..16, then again from 17), 1..16 */
+    uint8_t cell = 0;               /* 0 = from the CC number (CC 0..15 = encoder 1..16, then again from 16), 1..16 */
     uint8_t grp = 0;                /* 0 = every group, 1..16 = the group it was learned in */
 };
 struct Run { int last = -1; bool high = false, on = false; int note = -1; bool caught = false; int prev = -1; };
@@ -410,7 +410,7 @@ public:
 
     /* ---- EC4 display (names on the encoders) ---------------------------------------- */
     bool ec4_names_on() const { return s.feedback >= 1; }
-    static int ec4_cell(const Map &m) { return m.cell ? (m.cell - 1) & 15 : (m.snum + 15) % 16; }
+    static int ec4_cell(const Map &m) { return m.cell ? (m.cell - 1) & 15 : m.snum % 16; }   /* EC4 factory: CC 0..15 */
     bool ec4_in_group(const Map &m) const { return m.grp == 0 || ec4_group < 0 || m.grp - 1 == ec4_group; }
     /* what the slot is called: its name, else its target ("C74", "N36", "PRG", "PG>", "PG2") */
     static std::string label(const Map &m) {

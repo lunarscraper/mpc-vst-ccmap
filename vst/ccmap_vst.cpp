@@ -98,13 +98,13 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.11.0"
+#define BUILD_ID "ccmap-0.11.2"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
 
 using namespace ccmap;
-[[maybe_unused]] static double mono_now() {
+static double mono_now() {
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec * 1e-9;
@@ -142,7 +142,8 @@ struct Plugin {
     bool owner = false;
     float open[NPARAMS] = {0};
     volatile int release[NPARAMS] = {0};
-    bool down[NPARAMS] = {false};        /* CLEAR/LOAD/SAVE: the host currently reports them pressed */
+    bool down[NPARAMS] = {false};        /* LEARN/CLEAR/LOAD/SAVE/SEND: the last state the host reported */
+    double trig_t[NPARAMS] = {0};        /* when each of them last fired */
     std::atomic<uint64_t> pending{0};    /* params whose value changed from our side */
     std::atomic<bool> redisplay{false};
     std::atomic<int> cur{0};             /* selected preset slot, 0-based */
@@ -1197,10 +1198,16 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         return;
     }
     if (is_trigger(key)) {
+        /* A press: 0 -> 1 always; 1 -> 0 too, but only well after the last press. So a host that
+         * holds the button as a toggle (MPC OS 3.10: 1 on one tap, 0 on the next, our reset to 0
+         * ignored) fires on every tap, while the release of a normal tap and the echo of our own
+         * reset (both within 0.6 s) don't fire again. */
         const bool down = n > 0.5f;
-        const bool rising = down && !w->down[i];   /* an echo of our own automate must not fire again */
+        const bool was = w->down[i];
         w->down[i] = down;
-        if (!rising) return;
+        const double t = mono_now();
+        if (down == was || (!down && t - w->trig_t[i] < 0.6)) return;
+        w->trig_t[i] = t;
         if (key == LOAD) { slot_load(w); web_apply(w); }
         else if (key == SAVE) slot_save(w);
         else if (key == SEND) {    /* FEEDBACK now: the controllers show the page's positions */

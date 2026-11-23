@@ -25,13 +25,13 @@ int main(){
   CHECK(!a.feed(p1,5)&&a.feed(p2,3),"assemble"); r=ec4::parse(a.buf.data(),(int)a.buf.size()); CHECK(r.setup==2,"setup");
   // mapper
   Mapper mp; mp.ec4_report(ec4::parse(g,8));
-  mp.sel=0; mp.learn=true; mp.input(DEV_EC4,0xB0,1,20); mp.set_name(0,"Cutoff");
-  mp.sel=1; mp.learn=true; mp.input(DEV_EC4,0xB0,18,20);  // auto cell 2 (CC18), unnamed -> C18
+  mp.sel=0; mp.learn=true; mp.input(DEV_EC4,0xB0,0,20); mp.set_name(0,"Cutoff");
+  mp.sel=1; mp.learn=true; mp.input(DEV_EC4,0xB0,17,20);  // auto cell 2 (CC17), unnamed -> C17
   mp.sel=2; mp.learn=true; mp.clock=100; mp.input(DEV_EC4,0xB0,74,20); mp.set_name(2,"Resonance");
   mp.clock=105; mp.ec4_report(ec4::parse(sp,11)); // shift+push encoder 6
   CHECK(mp.map[2].cell==6 && mp.map[2].grp==4,"assign cell %d grp %d",mp.map[2].cell,mp.map[2].grp);
   std::string c[16]; mp.ec4_screen(c);
-  CHECK(c[0]=="Ctff"&&c[1]=="C18 "&&c[5]=="Rsnn"&&c[3]=="    ","screen '%s' '%s' '%s'",c[0].c_str(),c[1].c_str(),c[5].c_str());
+  CHECK(c[0]=="Ctff"&&c[1]=="C17 "&&c[5]=="Rsnn"&&c[3]=="    ","screen '%s' '%s' '%s'",c[0].c_str(),c[1].c_str(),c[5].c_str());
   // other group: hidden
   uint8_t g5[]={0xF0,0,0,0,0x4E,0x24,0x15,0xF7}; mp.ec4_report(ec4::parse(g5,8)); mp.ec4_screen(c);
   CHECK(c[0]=="    ","group filter '%s'",c[0].c_str());
