@@ -98,7 +98,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.11.2"
+#define BUILD_ID "ccmap-0.11.3"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -871,10 +871,16 @@ static std::string state_json(Plugin *w) {
     uint8_t led[NLEDS];
     mp.leds(led);
     mp.template_name(tn, sizeof tn);
-    std::snprintf(b, sizeof b, "{\"lc\":%s,\"tmpl\":%s,\"tmpl_led\":%d,\"page\":%d,\"learn\":%s,\"last_slot\":%d,\"last\":",
+    int ec4s[ec4::NCELL];
+    mp.ec4_slots(ec4s);
+    bool ec4_any = mp.ec4_seen;
+    for (int c = 0; c < ec4::NCELL; c++) if (ec4s[c] >= 0) ec4_any = true;
+    std::snprintf(b, sizeof b, "{\"ec4\":%s,\"ec4_group\":%d,", ec4_any ? "true" : "false", mp.ec4_group + 1);
+    j = b;
+    std::snprintf(b, sizeof b, "\"lc\":%s,\"tmpl\":%s,\"tmpl_led\":%d,\"page\":%d,\"learn\":%s,\"last_slot\":%d,\"last\":",
                   mp.lc_seen ? "true" : "false", ccweb::js(tn).c_str(), Mapper::template_colour(mp.lc_ch), mp.s.page + 1,
                   mp.learn ? "true" : "false", mp.last_slot);
-    j = b;
+    j += b;
     j += ccweb::js(mp.last);
     /* the Launch Control of the active template and page: 16 knobs, 8 pads */
     auto lc_slot = [&](int stype, int num) {
@@ -901,12 +907,16 @@ static std::string state_json(Plugin *w) {
         std::snprintf(b, sizeof b, ",\"led\":%d", led[p]);
         j += (p ? "," : "") + item(lc_slot(S_NOTE, p < 4 ? 9 + p : 25 + p - 4), std::string(b));
     }
-    /* every other slot of the page (EC4, E16, UC-33, other USB, other LC templates are left out) */
+    /* the EC4's 16 encoders as it shows them (active page, its group) */
+    j += "],\"ec4_knobs\":[";
+    for (int c = 0; c < ec4::NCELL; c++) j += (c ? "," : "") + item(ec4s[c], "");
+    /* every other slot of the page (E16, UC-33, other USB, other EC4 slots; other LC templates are left out) */
     j += "],\"others\":[";
     bool first = true;
     for (int i = 0; i < NMAP; i++) {
         const Map &m = mp.map[i];
         if (!m.used || m.dev == DEV_LC || !mp.on_page(m)) continue;
+        if (std::find(ec4s, ec4s + ec4::NCELL, i) != ec4s + ec4::NCELL) continue;   /* already in the EC4 grid */
         src_name(src, sizeof src, m.dev, m.sch, m.stype, m.snum);
         const std::string extra = ",\"src\":" + ccweb::js(src);
         j += (first ? "" : ",") + item(i, extra);

@@ -713,6 +713,20 @@ int main(int argc, char **argv) {
         CHECK(js.find("\"tmpl\":\"USER 1\"") != std::string::npos, "state: template: %.80s", js.c_str());
         CHECK(js.find("\"target\":\"CC 74 / CH 5 / A\"") != std::string::npos, "state: knob 1 target");
         CHECK(js.find("\"src\":\"E16 CH1 CC 7\"") != std::string::npos, "state: E16 in others");
+        /* 0.11.3: EC4 encoders get their own grid (CC 2 = encoder 3), not the others list */
+        set(e, "Slot", 3); press(e, "Learn"); t_in(e, DEV_EC4, 0xB0, 2, 40);
+        take(e);
+        js = http_get("/state");
+        {
+            const size_t a = js.find("\"ec4_knobs\":["), o = js.find("\"others\":");
+            const size_t s3 = js.find("{\"slot\":2,", a == std::string::npos ? 0 : a);
+            CHECK(js.find("\"ec4\":true") != std::string::npos, "state: ec4 seen");
+            CHECK(a != std::string::npos && o != std::string::npos && s3 < o, "state: EC4 slot in its grid");
+            CHECK(js.find("EC4 CH1 CC 2", o) == std::string::npos, "state: EC4 slot not in others");
+            int n = 0;
+            for (size_t q = a; q < o; q++) if (js.compare(q, 7, "\"slot\":") == 0) n++;
+            CHECK(n == 16, "state: 16 EC4 cells (%d)", n);
+        }
         CHECK(http_get("/label?slot=1&name=Clem%20Cutoff").find("ok") != std::string::npos, "label set");
         set(e, "Slot", 1);
         CHECK(display(e, "Slot") == "1 Clem Cutoff", "slot shows the name: '%s'", display(e, "Slot").c_str());

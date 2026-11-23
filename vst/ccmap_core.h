@@ -130,6 +130,7 @@ public:
     long dropped = 0;
     /* EC4 display */
     int ec4_group = -1;        /* the EC4's current group 0..15 as it reported it, -1 = unknown */
+    bool ec4_seen = false;     /* an EC4 has sent something (phone view shows its encoders) */
     int ec4_setup = -1;        /* its current setup 0..15, -1 = unknown */
     int ec4_learn_slot = -1;   /* slot just learned from the EC4: SHIFT + push sets its encoder */
     double ec4_learn_time = 0;
@@ -249,6 +250,7 @@ public:
             return;
         }
         if (dev == DEV_LC) set_template(ch);
+        if (dev == DEV_EC4) ec4_seen = true;
         char nm[48];
         src_name(nm, sizeof nm, dev, ch, stype, d1);
         if (stype == S_CC) std::snprintf(last, sizeof last, "%s = %d", nm, d2);
@@ -427,20 +429,25 @@ public:
     }
     /* the 16 cells of the EC4's name page for the active page and the EC4's group: per encoder
      * the first slot learned from the EC4 (turning it; a slot on its push only if none turns it) */
-    void ec4_screen(std::string cell[ec4::NCELL]) const {
-        for (int c = 0; c < ec4::NCELL; c++) cell[c].clear();
+    void ec4_slots(int slot[ec4::NCELL]) const {   /* the slot each encoder shows, -1 = none */
+        for (int c = 0; c < ec4::NCELL; c++) slot[c] = -1;
         for (int pass = 0; pass < 2; pass++)
             for (int i = 0; i < NMAP; i++) {
                 const Map &m = map[i];
                 if (!m.used || m.dev != DEV_EC4 || m.stype != (pass ? S_NOTE : S_CC) || !on_page(m) || !ec4_in_group(m)) continue;
                 const int c = ec4_cell(m);
-                if (cell[c].empty()) cell[c] = ec4::abbrev(label(m));
+                if (slot[c] < 0) slot[c] = i;
             }
-        for (int c = 0; c < ec4::NCELL; c++) if (cell[c].empty()) cell[c] = "    ";
+    }
+    void ec4_screen(std::string cell[ec4::NCELL]) const {
+        int slot[ec4::NCELL];
+        ec4_slots(slot);
+        for (int c = 0; c < ec4::NCELL; c++) cell[c] = slot[c] < 0 ? "    " : ec4::abbrev(label(map[slot[c]]));
     }
     /* a report from the EC4 (setup / group / SHIFT + encoder push) */
     void ec4_report(const ec4::Report &r) {
         if (!r.ok) return;
+        ec4_seen = true;
         if (r.setup >= 0) ec4_setup = r.setup;
         if (r.group >= 0) ec4_group = r.group;
         if (r.shift_push >= 0 && ec4_learn_slot >= 0 && ec4_learn_slot == sel && clock - ec4_learn_time <= 15.0) {

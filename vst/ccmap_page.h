@@ -82,10 +82,16 @@ svg.arc { touch-action: none; cursor: ns-resize; }
 </header>
 
 <main id="v-ctl">
+<section id="sec-ec4" hidden>
+<h2 id="ec4h">Faderfox EC4 · Encoder</h2>
+<div class="grid" id="ec4"></div>
+</section>
+<section id="sec-lc">
 <h2>Launch Control · Regler</h2>
 <div class="grid" id="knobs"></div>
 <h2>Pads</h2>
 <div class="grid" id="pads"></div>
+</section>
 <h2 id="oh" hidden>Weitere Controller</h2>
 <div class="list" id="others"></div>
 <p class="hint">Auf dem Bogen auf- und abwischen stellt den Wert ein, ein Pad antippen spielt es. Den Namen antippen benennt den Regler um; CC Map speichert die Namen mit Projekt und Preset.</p>
@@ -126,19 +132,29 @@ function arc(val) {
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 let st = null, editing = -1, drag = null, view = "ctl";
 
-function ctlHtml(k, i, isPad) {
-  const label = k.slot < 0 ? "frei" : (k.label || (isPad ? "Pad " + (i + 1) : "Regler " + (i + 1)));
+function ctlHtml(k, i, isPad, pre) {
+  pre = pre || (isPad ? "P" : "K");
+  const what = pre === "E" ? "Encoder " : isPad ? "Pad " : "Regler ";
+  const label = k.slot < 0 ? "frei" : (k.label || what + (i + 1));
   const hot = st && k.slot >= 0 && k.slot === st.last_slot;
   const visual = isPad ? '<div class="pad" data-pad="' + k.slot + '" style="background:' + (ledColour(k.led) || "#2c2e33") + '"></div>'
                        : '<span data-knob="' + k.slot + '" data-val="' + k.val + '">' + arc(k.val) + "</span>";
-  return '<div class="ctl' + (k.slot < 0 ? " empty" : "") + (hot ? " hot" : "") + '"><span class="nr">' + (isPad ? "P" : "K") + (i + 1) + "</span>" + visual +
-    '<span class="name" data-slot="' + k.slot + '" data-what="' + esc((isPad ? "Pad " : "Regler ") + (i + 1)) + '" tabindex="0">' + esc(label) +
+  return '<div class="ctl' + (k.slot < 0 ? " empty" : "") + (hot ? " hot" : "") + '"><span class="nr">' + pre + (i + 1) + "</span>" + visual +
+    '<span class="name" data-slot="' + k.slot + '" data-what="' + esc(what + (i + 1)) + '" tabindex="0">' + esc(label) +
     '</span><span class="tgt">' + esc(k.slot < 0 ? "" : k.target) + "</span></div>";
 }
 function render() {
   if (!st) return;
-  document.documentElement.style.setProperty("--tmpl", ledColour(st.tmpl_led) || "#555");
-  $("tmpl").textContent = st.lc ? "LC " + st.tmpl : "Launch Control nicht gefunden";
+  document.documentElement.style.setProperty("--tmpl", !st.lc && st.ec4 ? "#3fbf5f" : ledColour(st.tmpl_led) || "#555");
+  /* the EC4 first when it is there; the Launch Control's grid only when one is there (or nothing else) */
+  const ec4 = !!st.ec4;
+  $("tmpl").textContent = st.lc ? "LC " + st.tmpl + (ec4 ? " · EC4" : "") : ec4 ? "Faderfox EC4" : "Kein Controller gefunden";
+  $("sec-ec4").hidden = !ec4;
+  $("sec-lc").hidden = ec4 && !st.lc;
+  if (ec4) {
+    $("ec4h").textContent = "Faderfox EC4 · Encoder" + (st.ec4_group > 0 ? " · Gruppe " + st.ec4_group : "");
+    $("ec4").innerHTML = st.ec4_knobs.map((k, i) => ctlHtml(k, i, false, "E")).join("");
+  }
   $("page").textContent = "Seite " + st.page;
   $("learn").hidden = !st.learn;
   $("last").textContent = st.last || "–";

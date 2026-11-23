@@ -6,7 +6,7 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.11.2, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.11.3, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
@@ -17,6 +17,7 @@ Control und UC-33 übernehmen per Pickup.
 0.8.0: **Baukasten** – eigene Seiten mit Fadern, Drehreglern, Tastern, Schaltern und XY-Pads auf dem Handy/iPad bauen, jede mit eigener CC, eigenem Kanal und Ausgang (eigene Kachel im Hub).
 0.9.0: Baukasten-Element **Picker** – zeigt einen Wert, antippen öffnet eine Rolle zum Drehen, optional mit Namen für die Werte.
 0.10.0: Baukasten-Element **Kanalzug** (Fader + Mute für den Mixer der Force per MIDI Learn), Knopf „Mixer-Seite anlegen“, Rückkanal-Port **CC Map Return**.
+0.11.3: Handy-Ansicht zeigt die 16 EC4-Encoder als eigenes Raster (benennen, bedienen).
 0.11.2: Tasten (LEARN, CLEAR, LOAD, SAVE, SEND VALUES) reagieren unter MPC OS 3.10 auf jeden Tipp.
 0.11.1: Encoder-Zuordnung wie ab Werk beim EC4 (CC 0–15 = Encoder 1–16).
 0.11.0: **Namen auf dem EC4** – jeder Encoder zeigt den Namen seines Slots (4 Zeichen), passend zu Seite und EC4-Gruppe.
@@ -215,6 +216,10 @@ CC Map stellt im WLAN der Force eine Webseite bereit. Darauf siehst du die Launc
 Templates und der aktiven Seite: jeden Regler mit Namen, Ziel (z. B. `CC 74 / CH 5 / A`) und Stellung,
 die Pads in ihrer LED-Farbe, darunter alle Slots der übrigen Controller (EC4, E16, UC-33 …). Der zuletzt
 bewegte Regler ist gelb umrandet. Die Seite aktualisiert sich etwa viermal pro Sekunde.
+
+Ist ein **Faderfox EC4** angeschlossen, steht oben ein eigenes Raster mit seinen 16 Encodern (E1–E16), so
+angeordnet wie am Gerät und passend zur aktiven Seite und EC4-Gruppe. Namen antippen benennt den Encoder –
+der Name erscheint sofort auch im EC4-Display. Ohne Launch Control wird deren Raster ausgeblendet.
 
 So öffnest du sie:
 1. Die Force ins WLAN bringen (Einstellungen der Force → WLAN).
