@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version, e.g. 0.10.0
+        description: Version, e.g. 0.11.0
         required: true
-        default: 0.10.0
+        default: 0.11.0
       dry_run:
         description: Build only (zip + skin previews as run artifacts), no draft release
         type: boolean
@@ -16,7 +16,7 @@ on:
 
 jobs:
   ccmap:
-    uses: sd88me/mpc-vst-plugins/.github/workflows/vst-release.yml@259f75d0ce0f836cfd89cc0a33c550b55917cffc
+    uses: open-mpc/mpc-vst-plugins/.github/workflows/vst-release.yml@259f75d0ce0f836cfd89cc0a33c550b55917cffc
     permissions:
       contents: write
     with:
