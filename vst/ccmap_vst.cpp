@@ -98,12 +98,17 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.10.0"
+#define BUILD_ID "ccmap-0.11.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
 
 using namespace ccmap;
+[[maybe_unused]] static double mono_now() {
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
 
 /* the parameters, by key (module.json); IDX[] is their position in the generated PARAMS[] */
 enum {
@@ -163,6 +168,13 @@ struct Plugin {
     double flash_until = 0;              /* template number on the pads until then (thread only) */
     std::vector<std::pair<int, int>> linked;
     int link_applied = 0;
+    /* EC4 display (thread only): the names its 16 encoder cells were last told */
+    int ec4_client = -1, ec4_port = -1;
+    std::string ec4_sent[ec4::NCELL];
+    bool ec4_probe = false;              /* ask it for setup + group */
+    double ec4_heal_t = 0;               /* round robin: one cell restated now and then */
+    int ec4_heal = 0;
+    std::map<int, ec4::Assembler> sx_in; /* SysEx pieces per client */
 #else
     std::vector<Msg> test_out;           /* offline test: what would have gone out */
 #endif
@@ -490,6 +502,11 @@ static void subscribe(Plugin *w, int client, int port) {
     if ((has_display(dev) || dev == DEV_USB) && (cap & SND_SEQ_PORT_CAP_WRITE) && !w->fb_port.count(client)) {
         w->fb_port[client] = port;
         LOG("[ccmap_vst] feedback -> %d:%d '%s'\n", client, port, snd_seq_port_info_get_name(pi));
+        if (dev == DEV_EC4 && w->ec4_client < 0) {   /* its names: ask where it stands, then write all 16 */
+            w->ec4_client = client; w->ec4_port = port; w->ec4_probe = true;
+            for (auto &c : w->ec4_sent) c.clear();
+            LOG("[ccmap_vst] EC4 names -> %d:%d\n", client, port);
+        }
         std::lock_guard<std::mutex> lk(w->mu);
         w->mp.feedback_all(dev);
     }
@@ -567,15 +584,42 @@ static void send_msg(Plugin *w, const Msg &m) {
         w->n_fb++;
     }
 }
-static void send_lc_sysex(Plugin *w, const uint8_t *d, int n) {
-    if (w->lc_client < 0) return;
+static void send_sysex(Plugin *w, int client, int port, const uint8_t *d, int n) {
     snd_seq_event_t ev;
     snd_seq_ev_clear(&ev);
     snd_seq_ev_set_source(&ev, w->led_port);
-    snd_seq_ev_set_dest(&ev, w->lc_client, w->lc_port);
+    snd_seq_ev_set_dest(&ev, client, port);
     snd_seq_ev_set_direct(&ev);
     snd_seq_ev_set_sysex(&ev, n, (void *)d);
     snd_seq_event_output_direct(w->seq, &ev);
+}
+static void send_lc_sysex(Plugin *w, const uint8_t *d, int n) {
+    if (w->lc_client < 0) return;
+    send_sysex(w, w->lc_client, w->lc_port, d, n);
+}
+/* EC4 names: write the cells whose text changed (one 26-byte message each), now and then one cell
+ * again in case a message got lost. Follows FEEDBACK: off there = nothing written. */
+static void ec4_update(Plugin *w, double t) {
+    if (w->ec4_client < 0) return;
+    if (w->ec4_probe) {
+        const std::vector<uint8_t> p = ec4::probe_msg();
+        send_sysex(w, w->ec4_client, w->ec4_port, p.data(), (int)p.size());
+        w->ec4_probe = false;
+    }
+    std::string want[ec4::NCELL];
+    {
+        std::lock_guard<std::mutex> lk(w->mu);
+        if (!w->mp.ec4_names_on()) { for (auto &c : w->ec4_sent) c.clear(); return; }
+        w->mp.ec4_screen(want);
+    }
+    int heal = -1;
+    if (t - w->ec4_heal_t > 2.0) { w->ec4_heal_t = t; heal = w->ec4_heal; w->ec4_heal = (w->ec4_heal + 1) % ec4::NCELL; }
+    for (int c = 0; c < ec4::NCELL; c++) {
+        if (want[c] == w->ec4_sent[c] && c != heal) continue;
+        const std::vector<uint8_t> m = ec4::name_msg(c, want[c]);
+        send_sysex(w, w->ec4_client, w->ec4_port, m.data(), (int)m.size());
+        w->ec4_sent[c] = want[c];
+    }
 }
 /* LEDs: SysEx F0 00 20 29 02 0A 78 <template> <index> <value> F7, only what changed */
 static void leds_update(Plugin *w, const uint8_t v[NLEDS], int tmpl) {
@@ -604,6 +648,8 @@ static void handle(Plugin *w, snd_seq_event_t *ev) {
         w->dev_of.erase(ev->data.addr.client);
         if (ev->type == SND_SEQ_EVENT_CLIENT_EXIT) {
             if (ev->data.addr.client == w->lc_client) w->lc_client = -1;
+            if (ev->data.addr.client == w->ec4_client) w->ec4_client = -1;
+            w->sx_in.erase(ev->data.addr.client);
             w->fb_port.erase(ev->data.addr.client);
             w->linked.erase(std::remove_if(w->linked.begin(), w->linked.end(),
                             [&](const std::pair<int, int> &a) { return a.first == ev->data.addr.client; }), w->linked.end());
@@ -628,6 +674,20 @@ static void handle(Plugin *w, snd_seq_event_t *ev) {
     case SND_SEQ_EVENT_KEYPRESS: st = 0xA0 | n.channel; d1 = n.note; d2 = n.velocity; break;
     case SND_SEQ_EVENT_PITCHBEND: { const int v = clampi(c.value + 8192, 0, 16383); st = 0xE0 | c.channel; d1 = v & 0x7f; d2 = v >> 7; break; }
     case SND_SEQ_EVENT_SYSEX:
+        if (dev == DEV_EC4) {   /* setup / group / SHIFT + push reports (firmware 2) */
+            ec4::Assembler &a = w->sx_in[ev->source.client];
+            if (!a.feed((const uint8_t *)ev->data.ext.ptr, (int)ev->data.ext.len)) return;
+            const ec4::Report r = ec4::parse(a.buf.data(), (int)a.buf.size());
+            if (!r.ok) return;
+            if (r.setup >= 0 && ev->source.client == w->ec4_client) for (auto &c : w->ec4_sent) c.clear();   /* another setup's screen */
+            std::lock_guard<std::mutex> lk(w->mu);
+            if (r.setup >= 0 || r.group >= 0)
+                LOG("[ccmap_vst] EC4 setup %d group %d\n", (r.setup >= 0 ? r.setup : w->mp.ec4_setup) + 1, (r.group >= 0 ? r.group : w->mp.ec4_group) + 1);
+            w->mp.clock = mono_now();
+            w->mp.ec4_report(r);
+            collect(w);
+            return;
+        }
         if (dev == DEV_LC) {
             std::lock_guard<std::mutex> lk(w->mu);
             w->mp.lc_sysex((const uint8_t *)ev->data.ext.ptr, (int)ev->data.ext.len);
@@ -639,6 +699,7 @@ static void handle(Plugin *w, snd_seq_event_t *ev) {
     std::lock_guard<std::mutex> lk(w->mu);
     if (w->mp.s.input == 0 && dev != DEV_LC && dev != DEV_UC && !has_display(dev)) { w->n_ignored++; return; }
     w->n_in++;
+    w->mp.clock = mono_now();
     w->mp.input(dev, st, d1, d2);
     collect(w);
 }
@@ -674,6 +735,7 @@ static void thread_main(Plugin *w) {
         }
         for (const Msg &m : out) send_msg(w, m);
         leds_update(w, v, tmpl);
+        ec4_update(w, t_now);
         if (link != w->link_applied) { w->link_applied = link; link_scan(w, link != 0); }
         timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);

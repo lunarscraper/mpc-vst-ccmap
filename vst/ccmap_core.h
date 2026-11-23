@@ -23,12 +23,14 @@
  * ========================================================================== */
 #ifndef CCMAP_CORE_H
 #define CCMAP_CORE_H
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include "ec4_text.h"
 
 namespace ccmap {
 
@@ -60,6 +62,9 @@ struct Map {
     uint8_t enc = ENC_ABS;
     int16_t val = -1;               /* where the control stands, 0..127; -1 = not known yet */
     char name[24] = "";             /* label the user gave the slot (phone view), "" = none */
+    /* EC4 display (0.11.0): which encoder shows the slot's name and in which EC4 group */
+    uint8_t cell = 0;               /* 0 = from the CC number (CC 1..16 = encoder 1..16, then again from 17), 1..16 */
+    uint8_t grp = 0;                /* 0 = every group, 1..16 = the group it was learned in */
 };
 struct Run { int last = -1; bool high = false, on = false; int note = -1; bool caught = false; int prev = -1; };
 struct Settings {
@@ -74,6 +79,7 @@ struct Settings {
     int takeover = 1;  /* absolute pots without feedback: 0 jump, 1 pickup */
     int web = 1;       /* phone view (HTTP server of the plugin) on */
     int files = 0;     /* phone view may list and download audio files from /media and /mnt */
+    /* (EC4 names follow FEEDBACK: on whenever it sends to the EC4) */
 };
 struct Msg { uint8_t port, len, d[3]; };
 
@@ -122,6 +128,12 @@ public:
     Msg q[QMAX];
     int nq = 0;
     long dropped = 0;
+    /* EC4 display */
+    int ec4_group = -1;        /* the EC4's current group 0..15 as it reported it, -1 = unknown */
+    int ec4_setup = -1;        /* its current setup 0..15, -1 = unknown */
+    int ec4_learn_slot = -1;   /* slot just learned from the EC4: SHIFT + push sets its encoder */
+    double ec4_learn_time = 0;
+    double clock = 0;          /* seconds, set by the wrapper before input() / ec4_report() */
 
     void clear_slot(int i) { map[i] = Map(); run[i] = Run(); }
     void reset() {
@@ -255,6 +267,9 @@ public:
             if (stype == S_NOTE && !press) return;   /* the release of the learning pad */
             Map &m = map[sel];
             m.used = true; m.dev = (uint8_t)dev; m.sch = (uint8_t)ch; m.stype = (uint8_t)stype; m.snum = (uint8_t)d1;
+            m.cell = 0;
+            m.grp = (uint8_t)(dev == DEV_EC4 && ec4_group >= 0 ? ec4_group + 1 : 0);
+            if (dev == DEV_EC4) { ec4_learn_slot = sel; ec4_learn_time = clock; }
             m.val = (int16_t)(stype == S_CC && m.enc == ENC_ABS ? d2 : -1);
             if (m.type == D_OFF) {   /* a fresh slot: pass the control on as it is */
                 m.type = stype == S_NOTE ? D_NOTE : D_CC;
@@ -393,11 +408,59 @@ public:
         }
     }
 
+    /* ---- EC4 display (names on the encoders) ---------------------------------------- */
+    bool ec4_names_on() const { return s.feedback >= 1; }
+    static int ec4_cell(const Map &m) { return m.cell ? (m.cell - 1) & 15 : (m.snum + 15) % 16; }
+    bool ec4_in_group(const Map &m) const { return m.grp == 0 || ec4_group < 0 || m.grp - 1 == ec4_group; }
+    /* what the slot is called: its name, else its target ("C74", "N36", "PRG", "PG>", "PG2") */
+    static std::string label(const Map &m) {
+        if (m.name[0]) return m.name;
+        char b[8];
+        switch (m.type) {
+        case D_CC: std::snprintf(b, sizeof b, "C%d", m.num); break;
+        case D_NOTE: std::snprintf(b, sizeof b, "N%d", m.num); break;
+        case D_PROG: std::snprintf(b, sizeof b, "PRG"); break;
+        case D_PAGE: if (m.num == 0) std::snprintf(b, sizeof b, "PG>"); else std::snprintf(b, sizeof b, "PG%d", m.num > 4 ? 4 : m.num); break;
+        default: b[0] = 0; break;
+        }
+        return b;
+    }
+    /* the 16 cells of the EC4's name page for the active page and the EC4's group: per encoder
+     * the first slot learned from the EC4 (turning it; a slot on its push only if none turns it) */
+    void ec4_screen(std::string cell[ec4::NCELL]) const {
+        for (int c = 0; c < ec4::NCELL; c++) cell[c].clear();
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < NMAP; i++) {
+                const Map &m = map[i];
+                if (!m.used || m.dev != DEV_EC4 || m.stype != (pass ? S_NOTE : S_CC) || !on_page(m) || !ec4_in_group(m)) continue;
+                const int c = ec4_cell(m);
+                if (cell[c].empty()) cell[c] = ec4::abbrev(label(m));
+            }
+        for (int c = 0; c < ec4::NCELL; c++) if (cell[c].empty()) cell[c] = "    ";
+    }
+    /* a report from the EC4 (setup / group / SHIFT + encoder push) */
+    void ec4_report(const ec4::Report &r) {
+        if (!r.ok) return;
+        if (r.setup >= 0) ec4_setup = r.setup;
+        if (r.group >= 0) ec4_group = r.group;
+        if (r.shift_push >= 0 && ec4_learn_slot >= 0 && ec4_learn_slot == sel && clock - ec4_learn_time <= 15.0) {
+            Map &m = map[sel];
+            if (m.used && m.dev == DEV_EC4) {
+                m.cell = (uint8_t)(r.shift_push + 1);
+                if (ec4_group >= 0) m.grp = (uint8_t)(ec4_group + 1);
+                std::snprintf(last, sizeof last, "EC4 KNOB %d -> SLOT %d", r.shift_push + 1, sel + 1);
+                changed |= CH_SLOT | CH_LAST;
+            }
+            ec4_learn_slot = -1;
+        }
+    }
+
     /* ---- state as text: settings, then one "m<slot>=..." per used or edited slot ---- */
     static bool is_default(const Map &m) {
         Map d;
         return !m.used && m.type == d.type && m.page == d.page && m.out == d.out && m.ch == d.ch &&
-               m.num == d.num && m.lo == d.lo && m.hi == d.hi && m.btn == d.btn && m.enc == d.enc && !m.name[0];
+               m.num == d.num && m.lo == d.lo && m.hi == d.hi && m.btn == d.btn && m.enc == d.enc && !m.name[0] &&
+               !m.cell && !m.grp;
     }
     std::string state() const {
         char b[128];
@@ -411,6 +474,7 @@ public:
                           m.stype, m.snum, m.page, m.out, m.ch, m.type, m.num, m.lo, m.hi, m.btn, m.enc, (int)m.val);
             t += b;
             if (m.name[0]) { t += "n" + std::to_string(i + 1) + "=" + esc(m.name) + ";"; }
+            if (m.cell || m.grp) { std::snprintf(b, sizeof b, "e%d=%d,%d;", i + 1, m.cell, m.grp); t += b; }
         }
         return t;
     }
@@ -483,6 +547,13 @@ public:
             else if (k.size() > 1 && k[0] == 'n' && k != "nm") {
                 const int i = std::atoi(k.c_str() + 1) - 1;
                 if (i >= 0 && i < NMAP) std::snprintf(map[i].name, sizeof map[i].name, "%s", unesc(v).c_str());
+            }
+            else if (k.size() > 1 && k[0] == 'e' && std::isdigit((unsigned char)k[1])) {
+                const int i = std::atoi(k.c_str() + 1) - 1;
+                int c = 0, g = 0;
+                if (i >= 0 && i < NMAP && std::sscanf(v, "%d,%d", &c, &g) == 2) {
+                    map[i].cell = (uint8_t)clampi(c, 0, 16); map[i].grp = (uint8_t)clampi(g, 0, 16);
+                }
             }
             else if (k.size() > 1 && k[0] == 'm') {
                 const int i = std::atoi(k.c_str() + 1) - 1;

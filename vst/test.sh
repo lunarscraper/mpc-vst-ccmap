@@ -10,5 +10,7 @@ docker run --rm -v "$PWD":/b -w /b gcc:12 bash -euc '
   g++ -O0 -g $SAN -std=c++17 -Wall -Wextra -Wno-unused-parameter -DNO_ALSA -fPIC -shared -Ibuild -I. \
       -o build/x86/ccmap-x86.so ccmap_vst.cpp -lpthread
   g++ -O0 -g $SAN -std=c++17 -I. -o build/x86/host_test host_test.cpp -ldl -lpthread
+  g++ -O0 -g $SAN -std=c++17 -Wall -Wextra -I. -o build/x86/ec4_test ec4_test.cpp
+  ./build/x86/ec4_test
   FORCEHUB_PORT=18080 ASAN_OPTIONS=detect_leaks=0 ./build/x86/host_test ./build/x86/ccmap-x86.so
 '

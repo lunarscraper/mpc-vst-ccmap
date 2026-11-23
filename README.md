@@ -6,7 +6,7 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.10.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.11.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
@@ -17,6 +17,7 @@ Control und UC-33 übernehmen per Pickup.
 0.8.0: **Baukasten** – eigene Seiten mit Fadern, Drehreglern, Tastern, Schaltern und XY-Pads auf dem Handy/iPad bauen, jede mit eigener CC, eigenem Kanal und Ausgang (eigene Kachel im Hub).
 0.9.0: Baukasten-Element **Picker** – zeigt einen Wert, antippen öffnet eine Rolle zum Drehen, optional mit Namen für die Werte.
 0.10.0: Baukasten-Element **Kanalzug** (Fader + Mute für den Mixer der Force per MIDI Learn), Knopf „Mixer-Seite anlegen“, Rückkanal-Port **CC Map Return**.
+0.11.0: **Namen auf dem EC4** – jeder Encoder zeigt den Namen seines Slots (4 Zeichen), passend zu Seite und EC4-Gruppe.
 Projekte und Presets älterer Versionen laden weiter.
 
 ## Warum ein Insert-Effekt
@@ -176,6 +177,36 @@ Presets pro Plugin gehen genauso, dann aber immer nur eins zur Zeit.
   einfach jede Gruppe lernen, Seite ALL lassen.
 - Die Push-Taster der Encoder (z. B. Typ Note) lassen sich wie Pads lernen, etwa als TOGGLE oder als PAGE.
 
+### Namen auf dem Display (ab 0.11.0, EC4-Firmware 2.x)
+
+CC Map schreibt jedem Encoder den Namen seines Slots ins Display, solange FEEDBACK nicht auf OFF steht.
+Name = der Slot-Name aus der Handy-Ansicht, gekürzt auf 4 Zeichen („Cutoff" → `Ctff`, „Echo Time" →
+`EcTi`, „Lane 12" → `Ln12`). Wer es genau will, gibt gleich 4 Zeichen ein. Slots ohne Namen zeigen ihr
+Ziel (`C74` = CC 74, `N36` = Note 36, `PRG`, `PG>`). Encoder ohne Slot auf der aktiven Seite bleiben leer.
+
+**Einmal am EC4 vorbereiten:**
+
+1. Firmware 2.x (Anzeige beim Einschalten; Update von faderfox.de).
+2. Im Setup, das CC Map nutzen soll, alle Encoder-Namen auf **`----`** setzen (am Gerät im Edit-Modus
+   oder im Web-Editor). Nur dort nimmt der EC4 Text vom Host an; Setups mit eigenen Namen bleiben,
+   wie sie sind.
+3. Einmal **SHIFT + NAME** drücken, sonst blendet der EC4 beim Drehen den Namen gegen den Wert aus.
+
+**Welcher Encoder zeigt welchen Slot:**
+
+- Von selbst aus der CC-Nummer: CC 1–16 = Encoder 1–16, CC 17–32 wieder Encoder 1–16 usw.
+  (CC 0 = Encoder 16). Das passt, wenn die Encoder einer Gruppe 16 aufeinanderfolgende CCs ab 1, 17,
+  33 … senden.
+- Sendet das Setup andere CCs: direkt nach dem LEARN am EC4 **SHIFT gedrückt halten und denselben
+  Encoder drücken** (innerhalb von 15 s). LAST zeigt dann `EC4 KNOB 6 -> SLOT 3`.
+- Die **EC4-Gruppe** merkt sich der Slot beim LEARN. Schaltet man am EC4 die Gruppe um, zeigt das
+  Display die Namen dieser Gruppe. Slots von vor 0.11.0 erscheinen in jeder Gruppe.
+- Seitenwechsel, Preset-/Projektladen, ein neuer Name in der Handy-Ansicht: Das Display folgt von selbst.
+
+Technik: Live-SysEx des EC4 (Format wie in Schwung, `ec4_text.h`), eine 26-Byte-Nachricht pro Encoder,
+nur bei Änderung; alle 2 s wird zusätzlich ein Feld neu geschrieben, falls eine Nachricht verloren ging.
+Beim Einstecken fragt CC Map Setup und Gruppe ab (im Log: `EC4 setup 1 group 3`).
+
 ## Handy-Ansicht (Tab SYNC)
 
 CC Map stellt im WLAN der Force eine Webseite bereit. Darauf siehst du die Launch Control des aktiven
@@ -307,7 +338,7 @@ eigene letzte Stellung. Der Kanalzug-Fader springt beim Antippen nicht, er wird 
 | `vst/captions.py`, `vst/fonts/` | Beschriftungen in Titillium Web (aus mpc-vst-euclidier, SIL OFL) |
 | `vst/host_test.cpp`, `vst/test.sh` | Offline-Test über Test-Hooks statt ALSA |
 
-Build: Actions → „VST release (draft)" → Run workflow (Vorlage: mpc-vst-rattler, sd88me/mpc-vst-plugins).
+Build: Actions → „VST release (draft)" → Run workflow (Vorlage: mpc-vst-rattler, open-mpc/mpc-vst-plugins).
 
 ## Hinweis
 
