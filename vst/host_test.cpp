@@ -389,6 +389,7 @@ int main(int argc, char **argv) {
         CHECK(display(e, "Source") == "MOVE A CONTROL ...", "normal tap arms once: '%s'", display(e, "Source").c_str());
         press(e, "Learn");
         CHECK(display(e, "Source") != "MOVE A CONTROL ...", "second tap cancels: '%s'", display(e, "Source").c_str());
+        set(e, "Slot", 1);   /* the chunk test below expects slot 1 in the editor */
     }
 
     /* ---- chunk: a new instance gets the same map ---- */
