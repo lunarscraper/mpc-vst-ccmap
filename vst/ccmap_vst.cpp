@@ -23,6 +23,9 @@
  *             drag a knob / tap a pad = play it from the phone; FILES: download the Stems folder
  *        +--> FEEDBACK: the slots' positions back to a Faderfox EC4 / OXI E16 (value display, no jumps) on a
  *             page change, a load and when it is plugged in; PICKUP for pots without feedback
+ *        +--> port "MPC" (0.12.0, TYPE = MPC): commands for the Force itself (transport, track, views,
+ *             Q-Links) to the controller script ccmapForce.lua (../mpc-script/), which the Force binds to
+ *             this port; the script answers with the view, the track and the Q-Link names (EC4 display)
  *
  *   BAUKASTEN (ccmap_kit.h, page/kit.html): pages of faders, knobs, buttons, toggles and XY pads the
  *   user builds on the phone; every element sends its own CC on its own port and channel (Out A..D).
@@ -98,7 +101,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.11.3"
+#define BUILD_ID "ccmap-0.12.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -158,6 +161,9 @@ struct Plugin {
     snd_seq_t *seq = nullptr;
     int in_port = -1, led_port = -1, out_port[NOUTS] = {-1, -1, -1, -1};
     int ret_port = -1;                   /* "CC Map Return": CCs coming back move the BAUKASTEN elements */
+    int mpc_port = -1;                   /* "CC Map MPC": to and from the Force's controller script (MPC link) */
+    ec4::Assembler mpc_sx;               /* SysEx pieces from the script (thread only) */
+    double mpc_heard = -1e9, mpc_hello = -1e9;   /* last message from the script, last HELLO sent (thread only) */
     int wake[2] = {-1, -1};
     std::thread thr;
     std::atomic<bool> running{false};
@@ -179,6 +185,8 @@ struct Plugin {
 #else
     std::vector<Msg> test_out;           /* offline test: what would have gone out */
 #endif
+    /* MPC link, guarded by mu: every view name and every control-surface key the script reported (phone view) */
+    std::vector<std::string> mpc_seen, mpc_keys;
 };
 static std::atomic<Plugin *> g_owner{nullptr};
 
@@ -459,6 +467,86 @@ static bool slot_save(Plugin *w) {
     return bank_write_locked();
 }
 
+/* ---- MPC link: the wire to ccmapForce.lua (both ways SysEx F0 7D 43 4D <cmd> <data> F7) ---------------
+ *   to the script     01 HELLO <version>          heartbeat; the script answers WELCOME and states all again
+ *                     10 VIEW <ASCII name>        ask the Force for this mode, or "btn:<key>" = press that button
+ *   from the script   41 WELCOME <version>
+ *                     42 VIEW <name>              the Force's current mode (engineMode.CurrentMode)
+ *                     43 POPUP <name>             its popup ("No Popup", "Sixteen Level", ...)
+ *                     44 TRACK <name>             the current track
+ *                     45 QLINK <i> <name> 00 <value>   Q-Link i (0..15): what it turns and its value as text
+ *                     46 KEY <text>               a key of mpc.controlSurface / mpc.engineMode (sent after HELLO)
+ *                     47 ERROR <text>             an API call that failed on this OS version
+ * Channel messages (buttons, Q-Links) go as CCs on channel 16 (ccmap_core.h, namespace mpc). */
+enum { MPC_PROTO = 1 };
+static const uint8_t MPC_HDR[3] = {0x7D, 0x43, 0x4D};
+static inline std::vector<uint8_t> mpc_frame(int cmd, const std::string &text) {
+    std::vector<uint8_t> d = {0xF0, MPC_HDR[0], MPC_HDR[1], MPC_HDR[2], (uint8_t)(cmd & 0x7F)};
+    for (char c : text) d.push_back((uint8_t)c & 0x7F);
+    d.push_back(0xF7);
+    return d;
+}
+static std::string mpc_text(const uint8_t *d, int n) {
+    std::string t;
+    for (int i = 0; i < n && t.size() < 48; i++) t += (d[i] >= 32 && d[i] < 127) ? (char)d[i] : '?';
+    return t;
+}
+static void mpc_parse(Plugin *w, const uint8_t *d, int n) {
+    if (n >= 1 && d[0] == 0xF0) { d++; n--; }
+    if (n >= 1 && d[n - 1] == 0xF7) n--;
+    if (n < 4 || std::memcmp(d, MPC_HDR, 3)) return;
+    const int cmd = d[3];
+    const uint8_t *x = d + 4;
+    const int nx = n - 4;
+    std::lock_guard<std::mutex> lk(w->mu);
+    MpcState &st = w->mp.mpc;
+    const bool was = st.on;
+    st.on = true;
+    if (!was) { std::snprintf(w->mp.last, sizeof w->mp.last, "MPC SCRIPT CONNECTED"); w->mp.changed |= CH_LAST; LOG("[ccmap_vst] MPC script connected\n"); }
+    switch (cmd) {
+    case 0x41:
+        st.ver = nx > 0 ? x[0] : 0;
+        LOG("[ccmap_vst] MPC script WELCOME, protocol %d (ours %d)\n", st.ver, MPC_PROTO);
+        break;
+    case 0x42: {
+        const std::string v = mpc_text(x, nx);
+        if (v == st.view) break;
+        st.view = v;
+        std::snprintf(w->mp.last, sizeof w->mp.last, "MPC VIEW: %s", v.c_str());
+        w->mp.changed |= CH_LAST;
+        if (std::find(w->mpc_seen.begin(), w->mpc_seen.end(), v) == w->mpc_seen.end() && w->mpc_seen.size() < 32) {
+            w->mpc_seen.push_back(v);
+            LOG("[ccmap_vst] MPC view seen: '%s'\n", v.c_str());
+        }
+        break;
+    }
+    case 0x43: st.popup = mpc_text(x, nx); break;
+    case 0x44: st.track = mpc_text(x, nx); break;
+    case 0x45: {
+        if (nx < 2 || x[0] >= mpc::NQL) break;
+        const int q = x[0];
+        int z = 1;
+        while (z < nx && x[z]) z++;
+        const std::string name = mpc_text(x + 1, z - 1), val = z < nx ? mpc_text(x + z + 1, nx - z - 1) : "";
+        if (name != st.qname[q]) w->mp.changed |= CH_SLOT;   /* the skin's NUMBER and the EC4 show it */
+        std::snprintf(st.qname[q], sizeof st.qname[q], "%s", name.c_str());
+        std::snprintf(st.qval[q], sizeof st.qval[q], "%s", val.c_str());
+        break;
+    }
+    case 0x46: {
+        const std::string k = mpc_text(x, nx);
+        if (std::find(w->mpc_keys.begin(), w->mpc_keys.end(), k) == w->mpc_keys.end() && w->mpc_keys.size() < 160) {
+            w->mpc_keys.push_back(k);
+            LOG("[ccmap_vst] MPC key: %s\n", k.c_str());
+        }
+        break;
+    }
+    case 0x47: LOG("[ccmap_vst] MPC script error: %s\n", mpc_text(x, nx).c_str()); break;
+    default: break;
+    }
+    collect(w);
+}
+
 /* ---- ALSA: one thread does all of it ---------------------------------------- */
 #ifndef NO_ALSA
 static std::string lower(std::string s) { for (char &c : s) c = (char)std::tolower((unsigned char)c); return s; }
@@ -563,6 +651,7 @@ static void send_msg(Plugin *w, const Msg &m) {
     snd_seq_ev_clear(&ev);
     const bool fb = m.port >= FB_PORT;   /* FEEDBACK: back to every controller of that kind */
     if (fb) snd_seq_ev_set_source(&ev, w->led_port);
+    else if (m.port == mpc::PORT) { if (w->mpc_port < 0) return; snd_seq_ev_set_source(&ev, w->mpc_port); snd_seq_ev_set_subs(&ev); }
     else { snd_seq_ev_set_source(&ev, w->out_port[m.port]); snd_seq_ev_set_subs(&ev); }
     snd_seq_ev_set_direct(&ev);
     const int t = m.d[0] & 0xF0, ch = m.d[0] & 0x0F;
@@ -593,6 +682,41 @@ static void send_sysex(Plugin *w, int client, int port, const uint8_t *d, int n)
     snd_seq_ev_set_direct(&ev);
     snd_seq_ev_set_sysex(&ev, n, (void *)d);
     snd_seq_event_output_direct(w->seq, &ev);
+}
+/* MPC link: a SysEx to whoever listens on "CC Map MPC" (the Force, for its script) */
+static void send_mpc_sysex(Plugin *w, int cmd, const std::string &text) {
+    if (w->mpc_port < 0) return;
+    std::vector<uint8_t> d = mpc_frame(cmd, text);
+    snd_seq_event_t ev;
+    snd_seq_ev_clear(&ev);
+    snd_seq_ev_set_source(&ev, w->mpc_port);
+    snd_seq_ev_set_subs(&ev);
+    snd_seq_ev_set_direct(&ev);
+    snd_seq_ev_set_sysex(&ev, (unsigned)d.size(), d.data());
+    snd_seq_event_output_direct(w->seq, &ev);
+}
+/* views asked for (TYPE = MPC, VIEW n) go out by name; HELLO every 2 s until the script answers, then every
+ * 5 s as a heartbeat; 12 s without a word = not connected */
+static void mpc_update(Plugin *w, double t) {
+    if (w->mpc_port < 0) return;
+    std::vector<std::string> go;
+    bool on;
+    {
+        std::lock_guard<std::mutex> lk(w->mu);
+        for (int i = 0; i < w->mp.nvq; i++) go.push_back(w->mp.views[w->mp.vq[i]]);
+        w->mp.nvq = 0;
+        on = w->mp.mpc.on;
+        if (on && t - w->mpc_heard > 12.0) {
+            w->mp.mpc = MpcState();
+            std::snprintf(w->mp.last, sizeof w->mp.last, "MPC SCRIPT LOST");
+            w->mp.changed |= CH_LAST | CH_SLOT;
+            collect(w);
+            LOG("[ccmap_vst] MPC script silent for 12 s\n");
+            on = false;
+        }
+    }
+    for (const std::string &v : go) { send_mpc_sysex(w, 0x10, v); LOG("[ccmap_vst] MPC view -> '%s'%s\n", v.c_str(), on ? "" : " (no script heard yet)"); }
+    if (t - w->mpc_hello > (on ? 5.0 : 2.0)) { w->mpc_hello = t; send_mpc_sysex(w, 0x01, std::string(1, (char)MPC_PROTO)); }
 }
 static void send_lc_sysex(Plugin *w, const uint8_t *d, int n) {
     if (w->lc_client < 0) return;
@@ -635,6 +759,13 @@ static void leds_update(Plugin *w, const uint8_t v[NLEDS], int tmpl) {
 }
 static void kit_return(Plugin *w, int ch, int cc, int val);
 static void handle(Plugin *w, snd_seq_event_t *ev) {
+    if (w->mpc_port >= 0 && ev->dest.client == snd_seq_client_id(w->seq) && ev->dest.port == w->mpc_port) {
+        if (ev->type == SND_SEQ_EVENT_SYSEX && w->mpc_sx.feed((const uint8_t *)ev->data.ext.ptr, (int)ev->data.ext.len)) {
+            w->mpc_heard = mono_now();
+            mpc_parse(w, w->mpc_sx.buf.data(), (int)w->mpc_sx.buf.size());
+        }
+        return;
+    }
     if (w->ret_port >= 0 && ev->dest.client == snd_seq_client_id(w->seq) && ev->dest.port == w->ret_port) {
         if (ev->type == SND_SEQ_EVENT_CONTROLLER) kit_return(w, ev->data.control.channel, (int)ev->data.control.param, ev->data.control.value);
         return;
@@ -735,6 +866,7 @@ static void thread_main(Plugin *w) {
             link = w->mp.s.link;
         }
         for (const Msg &m : out) send_msg(w, m);
+        mpc_update(w, t_now);
         leds_update(w, v, tmpl);
         ec4_update(w, t_now);
         if (link != w->link_applied) { w->link_applied = link; link_scan(w, link != 0); }
@@ -769,7 +901,12 @@ static void alsa_open(Plugin *w) {
     /* back channel: whoever sends here (the Force as a MIDI output, another plugin) moves the kit's elements */
     w->ret_port = snd_seq_create_simple_port(w->seq, "Return", SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
                                              SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
-    LOG("[ccmap_vst] ALSA client '" PLUG_NAME "' (%d), out ports %d..%d\n", snd_seq_client_id(w->seq), w->out_port[0], w->out_port[3]);
+    /* MPC link: the Force binds ccmapForce.lua to this port (its .ini names it); both ways */
+    w->mpc_port = snd_seq_create_simple_port(w->seq, "MPC", SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ |
+                                             SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE | SND_SEQ_PORT_CAP_DUPLEX,
+                                             SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
+    LOG("[ccmap_vst] ALSA client '" PLUG_NAME "' (%d), out ports %d..%d, MPC link port %d ('" PLUG_NAME " MPC')\n",
+        snd_seq_client_id(w->seq), w->out_port[0], w->out_port[3], w->mpc_port);
     if (w->in_port < 0 || w->out_port[0] < 0) { LOG("[ccmap_vst] port creation failed\n"); return; }
     /* hot-plug: the system announce port tells us about ports that appear later */
     snd_seq_connect_from(w->seq, w->in_port, SND_SEQ_CLIENT_SYSTEM, SND_SEQ_PORT_SYSTEM_ANNOUNCE);
@@ -837,6 +974,20 @@ extern "C" __attribute__((visibility("default"))) void ccmap_test_leds(AEffect *
     Plugin *w = (Plugin *)e->object;
     std::lock_guard<std::mutex> lk(w->mu);
     w->mp.leds(v);
+}
+/* MPC link: a SysEx from the script; the view names asked for since last time ('\n' after each) */
+extern "C" __attribute__((visibility("default"))) void ccmap_test_mpc_in(AEffect *e, const uint8_t *d, int n) {
+    mpc_parse((Plugin *)e->object, d, n);
+}
+extern "C" __attribute__((visibility("default"))) int ccmap_test_mpc_views(AEffect *e, char *buf, int max) {
+    Plugin *w = (Plugin *)e->object;
+    std::lock_guard<std::mutex> lk(w->mu);
+    std::string t;
+    for (int i = 0; i < w->mp.nvq; i++) t += std::string(w->mp.views[w->mp.vq[i]]) + "\n";
+    const int n = w->mp.nvq;
+    w->mp.nvq = 0;
+    std::snprintf(buf, (size_t)max, "%s", t.c_str());
+    return n;
 }
 /* the template-change flash: returns whether one was requested (and clears it), v = the flash picture */
 extern "C" __attribute__((visibility("default"))) int ccmap_test_flash(AEffect *e, uint8_t *v) {
@@ -922,7 +1073,18 @@ static std::string state_json(Plugin *w) {
         j += (first ? "" : ",") + item(i, extra);
         first = false;
     }
-    j += "]}";
+    /* MPC link: connection, what the Force shows, the 16 view names, the names seen so far, the Q-Links */
+    const MpcState &ms = mp.mpc;
+    j += "],\"mpc\":{\"on\":" + std::string(ms.on ? "true" : "false") + ",\"view\":" + ccweb::js(ms.view.c_str()) +
+         ",\"popup\":" + ccweb::js(ms.popup.c_str()) + ",\"track\":" + ccweb::js(ms.track.c_str()) + ",\"views\":[";
+    for (int v = 0; v < mpc::NVIEW; v++) j += (v ? "," : "") + ccweb::js(mp.views[v]);
+    j += "],\"seen\":[";
+    for (size_t k = 0; k < w->mpc_seen.size(); k++) j += (k ? "," : "") + ccweb::js(w->mpc_seen[k].c_str());
+    j += "],\"keys\":[";
+    for (size_t k = 0; k < w->mpc_keys.size(); k++) j += (k ? "," : "") + ccweb::js(w->mpc_keys[k].c_str());
+    j += "],\"ql\":[";
+    for (int q = 0; q < mpc::NQL; q++) j += std::string(q ? "," : "") + "[" + ccweb::js(ms.qname[q]) + "," + ccweb::js(ms.qval[q]) + "]";
+    j += "]}}";
     return j;
 }
 static void web_label(Plugin *w, int slot, const std::string &name) {
@@ -1136,6 +1298,16 @@ static void web_apply(Plugin *w) {
             return ok;
         };
         w->hooks.files_on = [w] { std::lock_guard<std::mutex> lk(w->mu); return w->mp.s.files != 0; };
+        w->hooks.mpc_view = [w](int v, const std::string &n) {
+            { std::lock_guard<std::mutex> lk(w->mu); w->mp.set_view(v, n); collect(w); }
+            w->redisplay.store(true);
+            return true;
+        };
+        w->hooks.mpc_go = [w](int v) {
+            { std::lock_guard<std::mutex> lk(w->mu); w->mp.fire_view(v); collect(w); }
+            wake(w);
+            return true;
+        };
         w->web = new forcehub::Server();
         w->web->id = "ccmap";
         w->web->name = "CC Map";
@@ -1328,10 +1500,11 @@ static void display(Plugin *w, int idx, char *buf, size_t n) {
         if (m.type == D_NOTE) note_name(buf, n, m.num);
         else if (m.type == D_PROG) std::snprintf(buf, n, "- (MIN..MAX)");
         else if (m.type == D_PAGE) { if (m.num == 0) std::snprintf(buf, n, "NEXT PAGE"); else std::snprintf(buf, n, "PAGE %d", clampi(m.num, 1, 4)); }
+        else if (m.type == D_MPC) std::snprintf(buf, n, "%s", mp.mpc_label(m.num, false).c_str());
         else std::snprintf(buf, n, "CC %d", m.num);
         return;
     case LO: case HI:
-        if (m.type == D_PAGE) std::snprintf(buf, n, "-");
+        if (m.type == D_PAGE || (m.type == D_MPC && !mpc::is_qlink(m.num))) std::snprintf(buf, n, "-");
         else std::snprintf(buf, n, "%d", key == LO ? m.lo : m.hi);
         return;
     default: break;

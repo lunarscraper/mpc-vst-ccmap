@@ -6,6 +6,8 @@
  *   GET /label?slot=N&name=X  give slot N (1-based) the name X ("" clears it)
  *   GET /set?slot=N&val=V     move slot N to V (0..127) as if its control had moved (knob on the phone)
  *   GET /press?slot=N&down=D  press (1) / release (0) slot N (pad on the phone)
+ *   GET /mpcview?n=N&name=X   MPC link: VIEW N (1..16) is the Force's mode X ("" clears it)
+ *   GET /mpcgo?n=N            MPC link: ask the Force for VIEW N now (to try a name)
  *   GET /files, /file, /zip   the Stems folders (ccmap_files.h), only while STEMS DOWNLOAD is on
  *
  * Nothing outside the map can be changed and nothing is ever written to disk. A download gets a
@@ -26,6 +28,8 @@ struct Hooks {
     std::function<void(int, const std::string &)> set_label;    /* slot index 0-based */
     std::function<bool(int, int)> remote;                       /* slot 0-based, value 0..127 */
     std::function<bool()> files_on;                             /* STEMS DOWNLOAD switch of the plugin */
+    std::function<bool(int, const std::string &)> mpc_view;     /* view 0-based, name */
+    std::function<bool(int)> mpc_go;                            /* view 0-based */
 };
 
 /* the CC Map routes; returns forcehub::NOT_MINE / DONE / KEPT */
@@ -42,6 +46,14 @@ static inline int route(forcehub::Server &sv, const Hooks &h, int c, const force
     if (r.route == "/set" || r.route == "/press") {
         const int v = r.route == "/set" ? r.num("val") : (r.arg("down") == "1" ? 127 : 0);
         if (slot < 1 || slot > 128 || !h.remote || !h.remote(slot - 1, v)) { bad(c, "no such slot"); return DONE; }
+        ok_json(c, "{\"ok\":true}");
+        return DONE;
+    }
+    if (r.route == "/mpcview" || r.route == "/mpcgo") {
+        const int v = r.num("n");
+        if (v < 1 || v > 16) { bad(c, "n 1..16"); return DONE; }
+        const bool ok = r.route == "/mpcview" ? (h.mpc_view && h.mpc_view(v - 1, r.arg("name"))) : (h.mpc_go && h.mpc_go(v - 1));
+        if (!ok) { bad(c, "not available"); return DONE; }
         ok_json(c, "{\"ok\":true}");
         return DONE;
     }

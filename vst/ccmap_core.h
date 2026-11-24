@@ -38,7 +38,32 @@ enum Dev { DEV_ANY = 0, DEV_LC = 1, DEV_UC = 2, DEV_USB = 3, DEV_EC4 = 4, DEV_E1
 /* controllers with value display / LED rings that take values back */
 static inline bool has_display(int dev) { return dev == DEV_EC4 || dev == DEV_E16; }
 enum SrcType { S_CC = 0, S_NOTE = 1 };
-enum DstType { D_OFF = 0, D_CC = 1, D_NOTE = 2, D_PROG = 3, D_PAGE = 4 };
+enum DstType { D_OFF = 0, D_CC = 1, D_NOTE = 2, D_PROG = 3, D_PAGE = 4, D_MPC = 5, NDST = 6 };
+
+/* ---- MPC link (0.12.0) ---------------------------------------------------------------
+ * TYPE = MPC: the slot drives the Force itself through the controller script ccmapForce.lua (MPC OS
+ * 3.10 Lua controller scripting, mpc-script/), which the Force binds to CC Map's own port "MPC".
+ * NUMBER picks the command:
+ *    0..15  buttons: CC <num> on channel 16, 127 on press, 0 on release
+ *   16..31  VIEW 1..16: SysEx 7D 43 4D 10 <name>; the script asks for that MPC mode by its name
+ *           ("Main Mode", "Step Sequencer", ...) or presses a control-surface button ("btn:<key>")
+ *   32..47  Q-LINK 1..16: relative CC <num> (1 = +1, 127 = -1), bound to the Force's Q-Link by the
+ *           script (AddInfiniteCCToQLink), so it turns whatever the Force's Q-Link turns
+ * Wire format back from the script: see mpc_parse() in ccmap_vst.cpp and ccmapForce.lua. */
+namespace mpc {
+enum { PORT = 15 };   /* Msg::port of the "MPC" port (below FB_PORT) */
+enum { NBTN = 16, VIEW0 = 16, NVIEW = 16, QL0 = 32, NQL = 16, NCMD = 48 };
+static const char *const BTN_NAME[NBTN] = {
+    "PLAY START", "PLAY / CONT", "STOP CLIPS", "REC", "OVERDUB", "UNDO", "REDO", "TRACK -",
+    "TRACK +", "NOTE REPEAT", "REC ARM", "METRONOME", "16 LEVELS", "FULL LEVEL", "QUANTISE", "TAP TEMPO"};
+static const char *const BTN_ABBR[NBTN] = {
+    "Play", "Cont", "StpC", "Rec", "OvDb", "Undo", "Redo", "Trk-", "Trk+", "NRpt", "Arm", "Metr", "16Lv", "FLvl", "Qnt", "Tap"};
+/* the views a fresh map knows (mode names proven on an MPC Live II, 3.10.1); the rest are filled in on the phone */
+static const char *const VIEW_DEFAULT[4] = {"Main Mode", "Step Sequencer", "Track Mute", "Pad Mute"};
+static inline bool is_btn(int n) { return n >= 0 && n < NBTN; }
+static inline bool is_view(int n) { return n >= VIEW0 && n < VIEW0 + NVIEW; }
+static inline bool is_qlink(int n) { return n >= QL0 && n < QL0 + NQL; }
+}   // namespace mpc
 enum BtnMode { B_MOMENT = 0, B_TOGGLE = 1 };
 /* how a CC source counts: absolute, relative with 64 = no change (65 = +1, 63 = -1), relative
  * two's complement (1 = +1, 127 = -1) */
@@ -82,6 +107,15 @@ struct Settings {
     /* (EC4 names follow FEEDBACK: on whenever it sends to the EC4) */
 };
 struct Msg { uint8_t port, len, d[3]; };
+
+/* what the Force's script reported (runtime only, never saved) */
+struct MpcState {
+    bool on = false;            /* the script answered recently */
+    int ver = 0;                /* its protocol version */
+    std::string view, popup, track;
+    char qname[mpc::NQL][24] = {};   /* Q-Link target names, "" = unknown */
+    char qval[mpc::NQL][16] = {};
+};
 
 /* changed[] bits, read and cleared by the wrapper */
 enum { CH_SEL = 1, CH_LEARN = 2, CH_PAGE = 4, CH_LAST = 8, CH_SLOT = 16, CH_TMPL = 32 };
@@ -135,10 +169,34 @@ public:
     int ec4_learn_slot = -1;   /* slot just learned from the EC4: SHIFT + push sets its encoder */
     double ec4_learn_time = 0;
     double clock = 0;          /* seconds, set by the wrapper before input() / ec4_report() */
+    /* MPC link: the names of VIEW 1..16 (saved with the map), views asked for and not sent yet, what the script told */
+    char views[mpc::NVIEW][32] = {};
+    int vq[8] = {0};
+    int nvq = 0;
+    MpcState mpc;
 
+    Mapper() { reset_views(); }
     void clear_slot(int i) { map[i] = Map(); run[i] = Run(); }
+    static const char *view_default(int v) { return v >= 0 && v < 4 ? mpc::VIEW_DEFAULT[v] : ""; }
+    void reset_views() { for (int v = 0; v < mpc::NVIEW; v++) std::snprintf(views[v], sizeof views[v], "%s", view_default(v)); }
+    void set_view(int v, const std::string &n) {
+        if (v < 0 || v >= mpc::NVIEW) return;
+        std::string t;
+        for (char c : n) if ((unsigned char)c >= 32 && (unsigned char)c < 127) t += c;   /* the script gets 7-bit ASCII */
+        std::snprintf(views[v], sizeof views[v], "%s", t.c_str());
+        changed |= CH_SLOT;
+    }
+    /* ask the Force for VIEW v (0-based); the wrapper sends the SysEx */
+    void fire_view(int v) {
+        if (v < 0 || v >= mpc::NVIEW) return;
+        if (!views[v][0]) { std::snprintf(last, sizeof last, "VIEW %d: NO NAME (PHONE VIEW)", v + 1); changed |= CH_LAST; return; }
+        if (nvq < 8) vq[nvq++] = v; else dropped++;
+        std::snprintf(last, sizeof last, "MPC > %s", views[v]);
+        changed |= CH_LAST;
+    }
     void reset() {
         for (int i = 0; i < NMAP; i++) clear_slot(i);
+        reset_views();
         s = Settings();
         sel = 0; learn = false;
         changed |= CH_SEL | CH_PAGE | CH_LEARN | CH_SLOT;
@@ -148,7 +206,7 @@ public:
     void emit(int port, int st, int d1, int d2, int len = 3) {
         if (nq >= QMAX) { dropped++; return; }
         Msg &m = q[nq++];
-        m.port = (uint8_t)(port >= FB_PORT ? clampi(port, FB_PORT, FB_PORT + NDEV - 1) : clampi(port, 0, NOUTS - 1));
+        m.port = (uint8_t)(port >= FB_PORT ? clampi(port, FB_PORT, FB_PORT + NDEV - 1) : port == mpc::PORT ? port : clampi(port, 0, NOUTS - 1));
         m.len = (uint8_t)len;
         m.d[0] = (uint8_t)st; m.d[1] = (uint8_t)(d1 & 0x7f); m.d[2] = (uint8_t)(d2 & 0x7f);
     }
@@ -158,6 +216,7 @@ public:
         for (int i = 0; i < NMAP; i++) {
             Run &r = run[i];
             if (r.note >= 0) { emit(map[i].out, 0x80 | map[i].ch, r.note, 0); r.note = -1; }
+            if (r.high && map[i].type == D_MPC && mpc::is_btn(map[i].num)) emit(mpc::PORT, 0xBF, map[i].num, 0);   /* NOTE REPEAT must not hang */
             r.high = false;
         }
     }
@@ -213,6 +272,7 @@ public:
             if (rise) set_page(m.num == 0 ? (s.page + 1) % NPAGES : m.num - 1);
             return;
         }
+        if (m.type == D_MPC) { drive_mpc(i, in, rise, high); return; }
         if (m.btn == B_TOGGLE) {
             if (!rise) return;
             r.on = !r.on;
@@ -233,6 +293,33 @@ public:
             break;
         }
         default: break;
+        }
+    }
+
+    /* MPC link: buttons follow the control (press / release, TOGGLE has no meaning here), a VIEW fires on the
+     * press, a Q-LINK turns by how far the control moved since last time (absolute controls; relative ones
+     * are stepped in input() directly). MIN..MAX scales the knob's travel, as for a CC. */
+    void drive_mpc(int i, int in, bool rise, bool high) {
+        const Map &m = map[i];
+        Run &r = run[i];
+        const int n = m.num;
+        if (mpc::is_btn(n)) {
+            if (rise) emit(mpc::PORT, 0xBF, n, 127);
+            else if (!high && r.last == 127) emit(mpc::PORT, 0xBF, n, 0);
+            r.last = high ? 127 : 0;
+        } else if (mpc::is_view(n)) {
+            if (rise) fire_view(n - mpc::VIEW0);
+        } else if (mpc::is_qlink(n)) {
+            const int v = clampi((int)std::lround(m.lo + (m.hi - m.lo) * (in / 127.0)), 0, 127);
+            if (r.last >= 0 && v != r.last) mpc_step(n, v - r.last);
+            r.last = v;
+        }
+    }
+    void mpc_step(int n, int step) {   /* relative CC, two's complement: 1..63 up, 65..127 down */
+        while (step != 0) {
+            const int d = clampi(step, -63, 63);
+            emit(mpc::PORT, 0xBF, n, d & 0x7F);
+            step -= d;
         }
     }
 
@@ -292,12 +379,18 @@ public:
             if (!on_page(m) && !(r.note >= 0 && !press)) continue;
             if (first < 0) first = i;
             int v = in;
+            if (stype == S_CC && m.enc != ENC_ABS && m.type == D_MPC && mpc::is_qlink(m.num)) {
+                /* a relative encoder on a Q-Link: its steps go to the Force as they are, no end stops */
+                mpc_step(m.num, m.enc == ENC_REL64 ? d2 - 64 : (d2 < 64 ? d2 : d2 - 128));
+                moved = true;
+                continue;
+            }
             if (stype == S_CC) {
                 if (m.enc != ENC_ABS) {   /* relative: steps onto the slot's own value */
                     const int step = m.enc == ENC_REL64 ? d2 - 64 : (d2 < 64 ? d2 : d2 - 128);
                     v = clampi((m.val < 0 ? 64 : m.val) + step, 0, 127);
                 } else if (s.takeover && !fb_capable(dev) && m.val >= 0 && !r.caught && in != 0 && in != 127 &&
-                           m.btn == B_MOMENT && m.type != D_NOTE && m.type != D_PAGE) {
+                           m.btn == B_MOMENT && m.type != D_NOTE && m.type != D_PAGE && m.type != D_MPC) {
                     /* (buttons and the ends of the travel always take over at once) */
                     const bool near = std::abs(in - m.val) <= PICKUP_NEAR;
                     const bool crossed = r.prev >= 0 && ((r.prev < m.val) != (in < m.val));
@@ -415,8 +508,9 @@ public:
     static int ec4_cell(const Map &m) { return m.cell ? (m.cell - 1) & 15 : m.snum % 16; }   /* EC4 factory: CC 0..15 */
     bool ec4_in_group(const Map &m) const { return m.grp == 0 || ec4_group < 0 || m.grp - 1 == ec4_group; }
     /* what the slot is called: its name, else its target ("C74", "N36", "PRG", "PG>", "PG2") */
-    static std::string label(const Map &m) {
+    std::string label(const Map &m) const {
         if (m.name[0]) return m.name;
+        if (m.type == D_MPC) return mpc_label(m.num, true);
         char b[8];
         switch (m.type) {
         case D_CC: std::snprintf(b, sizeof b, "C%d", m.num); break;
@@ -426,6 +520,25 @@ public:
         default: b[0] = 0; break;
         }
         return b;
+    }
+    /* an MPC command by name: short (EC4, 4 characters) or long (skin, phone view). A Q-Link is called
+     * what the Force says it turns ("Cutoff"), a VIEW by its mode name */
+    std::string mpc_label(int n, bool shrt) const {
+        char b[48];
+        if (mpc::is_btn(n)) return shrt ? mpc::BTN_ABBR[n] : mpc::BTN_NAME[n];
+        if (mpc::is_view(n)) {
+            const char *v = views[n - mpc::VIEW0];
+            if (shrt) { if (v[0]) return v; std::snprintf(b, sizeof b, "V%d", n - mpc::VIEW0 + 1); return b; }
+            std::snprintf(b, sizeof b, "VIEW %d: %s", n - mpc::VIEW0 + 1, v[0] ? v : "(NO NAME)");
+            return b;
+        }
+        if (mpc::is_qlink(n)) {
+            const char *q = mpc.qname[n - mpc::QL0];
+            if (shrt) { if (q[0]) return q; std::snprintf(b, sizeof b, "Q%d", n - mpc::QL0 + 1); return b; }
+            std::snprintf(b, sizeof b, "Q-LINK %d%s%s", n - mpc::QL0 + 1, q[0] ? ": " : "", q);
+            return b;
+        }
+        return shrt ? "-" : "- (0..47)";
     }
     /* the 16 cells of the EC4's name page for the active page and the EC4's group: per encoder
      * the first slot learned from the EC4 (turning it; a slot on its push only if none turns it) */
@@ -483,6 +596,8 @@ public:
             if (m.name[0]) { t += "n" + std::to_string(i + 1) + "=" + esc(m.name) + ";"; }
             if (m.cell || m.grp) { std::snprintf(b, sizeof b, "e%d=%d,%d;", i + 1, m.cell, m.grp); t += b; }
         }
+        for (int v = 0; v < mpc::NVIEW; v++)   /* MPC views, where they differ from a fresh map */
+            if (std::strcmp(views[v], view_default(v))) t += "v" + std::to_string(v + 1) + "=" + esc(views[v]) + ";";
         return t;
     }
     /* names go into the "key=value;" text percent-encoded (no ';' '=' '%' or controls inside) */
@@ -523,6 +638,7 @@ public:
         case D_NOTE: std::snprintf(b, n, "NOTE %d / CH %d / %c", m.num, m.ch + 1, o); break;
         case D_PROG: std::snprintf(b, n, "PROGRAM / CH %d / %c", m.ch + 1, o); break;
         case D_PAGE: if (m.num == 0) std::snprintf(b, n, "NEXT PAGE"); else std::snprintf(b, n, "PAGE %d", m.num > 4 ? 4 : m.num); break;
+        case D_MPC: std::snprintf(b, n, "MPC %s", mpc_label(m.num, false).c_str()); break;
         default: std::snprintf(b, n, "OFF"); break;
         }
     }
@@ -555,6 +671,10 @@ public:
                 const int i = std::atoi(k.c_str() + 1) - 1;
                 if (i >= 0 && i < NMAP) std::snprintf(map[i].name, sizeof map[i].name, "%s", unesc(v).c_str());
             }
+            else if (k.size() > 1 && k[0] == 'v' && std::isdigit((unsigned char)k[1])) {
+                const int i = std::atoi(k.c_str() + 1) - 1;
+                if (i >= 0 && i < mpc::NVIEW) std::snprintf(views[i], sizeof views[i], "%s", unesc(v).c_str());
+            }
             else if (k.size() > 1 && k[0] == 'e' && std::isdigit((unsigned char)k[1])) {
                 const int i = std::atoi(k.c_str() + 1) - 1;
                 int c = 0, g = 0;
@@ -574,7 +694,7 @@ public:
                 m.dev = (uint8_t)clampi(f[1], 0, NDEV - 1); m.sch = (uint8_t)clampi(f[2], 0, 15);
                 m.stype = (uint8_t)clampi(f[3], 0, 1); m.snum = (uint8_t)clampi(f[4], 0, 127);
                 m.page = (uint8_t)clampi(f[5], 0, NPAGES); m.out = (uint8_t)clampi(f[6], 0, NOUTS - 1);
-                m.ch = (uint8_t)clampi(f[7], 0, 15); m.type = (uint8_t)clampi(f[8], 0, 4);
+                m.ch = (uint8_t)clampi(f[7], 0, 15); m.type = (uint8_t)clampi(f[8], 0, NDST - 1);
                 m.num = (uint8_t)clampi(f[9], 0, 127); m.lo = (uint8_t)clampi(f[10], 0, 127);
                 m.hi = (uint8_t)clampi(f[11], 0, 127); m.btn = (uint8_t)clampi(f[12], 0, 1);
                 m.enc = (uint8_t)clampi(f[13], 0, 2); m.val = (int16_t)clampi(f[14], -1, 127);

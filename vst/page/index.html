@@ -69,13 +69,27 @@ svg.arc { touch-action: none; cursor: ns-resize; }
 .frow .dl { font: 700 13px var(--sans); color: var(--accent); }
 .zipbtn { display: inline-block; font: 700 15px var(--sans); background: var(--accent); color: #141414; padding: 10px 16px; border-radius: 8px; text-decoration: none; margin: 4px 0 12px; }
 .note { color: var(--muted); font-size: 14px; line-height: 1.5; }
+.mstat { font: 600 15px var(--sans); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px; }
+.mstat .ok { color: #3fbf5f; } .mstat .no { color: #e0664f; }
+.vrow { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.vrow.cur { border-color: var(--hot); }
+.vrow .vn { font: 600 15px var(--sans); overflow-wrap: anywhere; cursor: text; }
+.vrow .vn.empty { color: var(--muted); font-weight: 400; }
+.vrow button { font: 700 14px var(--sans); padding: 8px 14px; border-radius: 8px; border: 0; background: var(--accent); color: #141414; }
+.vrow button:disabled { background: #3a3d44; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { font: 600 13px var(--sans); padding: 6px 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+.qrow { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font: 14px var(--sans); }
+.qrow .val { font-size: 14px; }
+details summary { color: var(--muted); font: 600 13px var(--sans); cursor: pointer; margin: 14px 0 6px; }
+.keys { font: 12px/1.6 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
 <header>
   <div class="row"><a class="home" href="/" aria-label="Alle Plugins">&#8962;</a><span class="tmpl"><span class="dot"></span><span id="tmpl">Launch Control</span></span>
     <span class="chip" id="page">Seite 1</span><span class="chip learn" id="learn" hidden>Learn</span></div>
-  <nav class="tabs"><button type="button" id="t-ctl" aria-pressed="true">Regler</button><button type="button" id="t-files" aria-pressed="false">Stems</button></nav>
+  <nav class="tabs"><button type="button" id="t-ctl" aria-pressed="true">Regler</button><button type="button" id="t-files" aria-pressed="false">Stems</button><button type="button" id="t-mpc" aria-pressed="false">MPC</button></nav>
   <div class="last" id="last">–</div>
 </header>
 
@@ -101,9 +115,23 @@ svg.arc { touch-action: none; cursor: ns-resize; }
   <p class="note" id="fnote"></p>
 </main>
 
+<main id="v-mpc" hidden>
+  <h2>Verbindung zur Force</h2>
+  <div class="mstat" id="mstat"></div>
+  <h2>Ansichten (TYPE = MPC, NUMBER VIEW 1–16)</h2>
+  <div class="list" id="vlist"></div>
+  <h2 id="seenh">Gesehene Ansichten</h2>
+  <div class="chips" id="seen"></div>
+  <p class="note">Ansicht auf der Force aufrufen, dann erscheint ihr Name oben bei „Gesehene Ansichten“. Einen Platz antippen und den Namen übernehmen; „Los“ probiert ihn sofort aus. Mit <span style="font-family:var(--mono)">btn:</span> davor drückt CC Map stattdessen die Taste dieses Namens (Liste unten).</p>
+  <h2 id="qh">Q-Links</h2>
+  <div class="list" id="qlist"></div>
+  <details><summary>Tasten und Felder, die die Force meldet</summary><div class="keys" id="keys"></div></details>
+</main>
+
 <div class="sheet" id="sheet" hidden>
   <div id="sh-title" style="font:600 14px var(--sans); color: var(--muted)"></div>
-  <input id="sh-name" maxlength="23" autocomplete="off" placeholder="Name, z. B. Cutoff">
+  <input id="sh-name" maxlength="31" autocomplete="off" placeholder="Name, z. B. Cutoff">
+  <div class="chips" id="sh-seen" hidden></div>
   <div class="btns"><button type="button" id="sh-cancel">Abbrechen</button><button type="button" id="sh-clear">Löschen</button><button type="button" class="save" id="sh-save">Speichern</button></div>
 </div>
 <div class="status" id="status"></div>
@@ -128,7 +156,7 @@ function arc(val) {
     '<text x="23" y="27" text-anchor="middle" font-size="11" font-family="monospace" fill="#ecE9e2">' + (val < 0 ? "–" : val) + "</text></svg>";
 }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-let st = null, editing = -1, drag = null, view = "ctl";
+let st = null, editing = -1, editView = -1, drag = null, view = "ctl";
 
 function ctlHtml(k, i, isPad, pre) {
   pre = pre || (isPad ? "P" : "K");
@@ -171,7 +199,7 @@ async function poll() {
     const r = await fetch("/state", { cache: "no-store" });
     st = await r.json();
     $("status").textContent = "";
-    if (editing < 0 && !drag && view === "ctl") render();
+    if (editing < 0 && editView < 0 && !drag) { if (view === "ctl") render(); else if (view === "mpc") renderMpc(); }
   } catch (e) { $("status").textContent = "keine Verbindung zur Force"; }
   setTimeout(poll, 250);
 }
@@ -186,11 +214,12 @@ document.addEventListener("click", (ev) => {
   $("sh-name").focus();
 });
 async function save(name) {
-  const slot = editing;
+  const slot = editing, v = editView;
   close_();
+  if (v >= 0) { try { await fetch("/mpcview?n=" + (v + 1) + "&name=" + encodeURIComponent(name)); } catch (e) {} return; }
   try { await fetch("/label?slot=" + (slot + 1) + "&name=" + encodeURIComponent(name)); } catch (e) {}
 }
-function close_() { editing = -1; $("sheet").hidden = true; render(); }
+function close_() { editing = -1; editView = -1; $("sheet").hidden = true; $("sh-seen").hidden = true; $("sh-name").maxLength = 23; if (view === "mpc") renderMpc(); else render(); }
 $("sh-save").addEventListener("click", () => save($("sh-name").value.trim()));
 $("sh-clear").addEventListener("click", () => save(""));
 $("sh-cancel").addEventListener("click", close_);
@@ -241,6 +270,50 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.classList && e.target.classList.contains("name")) e.target.click();
 });
 
+/* ---- MPC link: views by name, what the Force's script reports ---- */
+function renderMpc() {
+  if (!st || !st.mpc) return;
+  const m = st.mpc;
+  $("mstat").innerHTML = m.on
+    ? '<span class="ok">● Skript verbunden</span><span>Ansicht: <b>' + esc(m.view || "–") + "</b>" + (m.popup && m.popup !== "No Popup" ? " · " + esc(m.popup) : "") +
+      "</span><span>Spur: " + esc(m.track || "–") + "</span>"
+    : '<span class="no">● Kein Skript gehört</span><span class="note">ccmapForce auf der Force installiert und die Force danach neu gestartet? Siehe README, Abschnitt „MPC-Link“.</span>';
+  $("vlist").innerHTML = m.views.map((n, i) => '<div class="vrow' + (n && n === m.view ? " cur" : "") + '"><span class="nr">V' + (i + 1) +
+    '</span><span class="vn' + (n ? "" : " empty") + '" data-view="' + i + '" tabindex="0">' + esc(n || "(frei – antippen)") +
+    '</span><button type="button" data-go="' + i + '"' + (n ? "" : " disabled") + ">Los</button></div>").join("");
+  $("seenh").hidden = !m.seen.length;
+  $("seen").innerHTML = m.seen.map((n) => '<button type="button" data-seen="' + esc(n) + '">' + esc(n) + "</button>").join("");
+  const q = m.ql.map((x, i) => [i, x[0], x[1]]).filter((x) => x[1]);
+  $("qh").hidden = !q.length;
+  $("qlist").innerHTML = q.map((x) => '<div class="qrow"><span class="nr">Q' + (x[0] + 1) + '</span><span>' + esc(x[1]) + '</span><span class="val">' + esc(x[2]) + "</span></div>").join("");
+  $("keys").textContent = m.keys.length ? m.keys.join("  ·  ") : "(noch nichts gemeldet)";
+}
+function editViewSheet(i, preset) {
+  editView = i;
+  $("sh-title").textContent = "Ansicht V" + (i + 1) + " · Name, wie die Force ihn meldet";
+  $("sh-name").maxLength = 31;
+  $("sh-name").value = preset !== undefined ? preset : st.mpc.views[i] || "";
+  $("sh-seen").innerHTML = st.mpc.seen.map((n) => '<button type="button" data-fill="' + esc(n) + '">' + esc(n) + "</button>").join("");
+  $("sh-seen").hidden = !st.mpc.seen.length;
+  $("sheet").hidden = false;
+  $("sh-name").focus();
+}
+document.addEventListener("click", (ev) => {
+  const v = ev.target.closest("[data-view]");
+  if (v) { editViewSheet(+v.dataset.view); return; }
+  const g = ev.target.closest("[data-go]");
+  if (g) { fetch("/mpcgo?n=" + (+g.dataset.go + 1)).catch(() => {}); return; }
+  const f = ev.target.closest("[data-fill]");
+  if (f) { $("sh-name").value = f.dataset.fill; return; }
+  const s = ev.target.closest("[data-seen]");
+  if (s && st && st.mpc) {   /* a seen name: onto the first free place (or edit it there) */
+    let i = st.mpc.views.indexOf(s.dataset.seen);
+    if (i < 0) i = st.mpc.views.findIndex((n) => !n);
+    if (i < 0) i = 15;
+    editViewSheet(i, s.dataset.seen);
+  }
+});
+
 /* ---- stems ---- */
 function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + " GB" : b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " kB"; }
 function fmtDate(t) { const d = new Date(t * 1000); return d.toLocaleDateString("de-DE") + " " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }); }
@@ -279,12 +352,13 @@ document.addEventListener("click", (ev) => {
 });
 function showView(v) {
   view = v;
-  $("v-ctl").hidden = v !== "ctl"; $("v-files").hidden = v !== "files";
-  $("t-ctl").setAttribute("aria-pressed", v === "ctl"); $("t-files").setAttribute("aria-pressed", v === "files");
-  if (v === "files") openDir(""); else render();
+  $("v-ctl").hidden = v !== "ctl"; $("v-files").hidden = v !== "files"; $("v-mpc").hidden = v !== "mpc";
+  $("t-ctl").setAttribute("aria-pressed", v === "ctl"); $("t-files").setAttribute("aria-pressed", v === "files"); $("t-mpc").setAttribute("aria-pressed", v === "mpc");
+  if (v === "files") openDir(""); else if (v === "mpc") renderMpc(); else render();
 }
 $("t-ctl").addEventListener("click", () => showView("ctl"));
 $("t-files").addEventListener("click", () => showView("files"));
+$("t-mpc").addEventListener("click", () => showView("mpc"));
 poll();
 </script>
 </body>

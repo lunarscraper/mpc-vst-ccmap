@@ -101,7 +101,7 @@ static void set(AEffect *e, const char *name, double v) {
     else if (s == "Web View" || s == "Files") hi = 1;
     else if (s == "Out" || s == "Active Page") hi = 3;
     else if (s == "Channel") { lo = 1; hi = 16; }
-    else if (s == "Type") hi = 4;
+    else if (s == "Type") hi = 5;
     else if (s == "Number" || s == "Min" || s == "Max") hi = 127;
     else if (s == "Preset") { lo = 1; hi = 32; }
     e->setParameter(e, param(e, name), (float)((v - lo) / (hi - lo)));
@@ -943,6 +943,116 @@ int main(int argc, char **argv) {
         CHECK(kget("/kit").find("\"name\":\"Old\"") != std::string::npos, "and comes back");
         e->dispatcher(e, 1, 0, 0, nullptr, 0);
         unlink(kitf);
+    }
+
+    /* ---- MPC link (0.12.0): TYPE = MPC, the script's answers, views by name ---- */
+    {
+        typedef void (*mpc_in_fn)(AEffect *, const uint8_t *, int);
+        typedef int (*mpc_views_fn)(AEffect *, char *, int);
+        mpc_in_fn t_mpc = (mpc_in_fn)dlsym(lib, "ccmap_test_mpc_in");
+        mpc_views_fn t_views = (mpc_views_fn)dlsym(lib, "ccmap_test_mpc_views");
+        CHECK(t_mpc && t_views, "MPC test hooks");
+        e = open_plugin(lib);
+        const int P = 15;   /* Msg::port of "CC Map MPC" */
+        /* slot 1: LC pad 1 -> PLAY START (0), slot 2: knob 1 -> Q-LINK 3 (34), slot 3: pad 2 -> VIEW 5 (20), slot 4: knob 2 -> NOTE REPEAT (9) */
+        set(e, "Slot", 1); press(e, "Learn"); t_in(e, DEV_LC, 0x90, 9, 127); t_in(e, DEV_LC, 0x80, 9, 0);
+        set(e, "Type", 5); set(e, "Number", 0);
+        CHECK(display(e, "Type") == "MPC" && display(e, "Number") == "PLAY START", "MPC target display: %s / %s", display(e, "Type").c_str(), display(e, "Number").c_str());
+        take(e);
+        t_in(e, DEV_LC, 0x90, 9, 127);
+        std::vector<Out> o = take(e);
+        CHECK(is(o, P, 0xBF, 0, 127), "PLAY START press -> CC 0 = 127 on ch 16: %s", dump(o).c_str());
+        t_in(e, DEV_LC, 0x80, 9, 0);
+        o = take(e);
+        CHECK(is(o, P, 0xBF, 0, 0), "release -> CC 0 = 0: %s", dump(o).c_str());
+        set(e, "Button", 1);   /* TOGGLE means nothing for an MPC button: still press / release */
+        t_in(e, DEV_LC, 0x90, 9, 127); t_in(e, DEV_LC, 0x80, 9, 0);
+        o = take(e);
+        CHECK(o.size() == 2 && o[0].d2 == 127 && o[1].d2 == 0, "MPC button ignores TOGGLE: %s", dump(o).c_str());
+
+        set(e, "Slot", 2); press(e, "Learn"); t_in(e, DEV_LC, 0xB0, 21, 60);
+        set(e, "Type", 5); set(e, "Number", 34);
+        CHECK(display(e, "Number") == "Q-LINK 3", "Q-Link display without a name: %s", display(e, "Number").c_str());
+        take(e);
+        t_in(e, DEV_LC, 0xB0, 21, 61);   /* the first move only sets where the knob stands */
+        t_in(e, DEV_LC, 0xB0, 21, 64);
+        o = take(e);
+        CHECK(is(o, P, 0xBF, 34, 3), "absolute knob +3 -> relative +3: %s", dump(o).c_str());
+        t_in(e, DEV_LC, 0xB0, 21, 62);
+        o = take(e);
+        CHECK(is(o, P, 0xBF, 34, 126), "-2 -> 126 (two's complement): %s", dump(o).c_str());
+        t_in(e, DEV_LC, 0xB0, 21, 0);   /* a jump of 62 */
+        t_in(e, DEV_LC, 0xB0, 21, 127);
+        o = take(e);
+        CHECK(o.size() == 4 && o[0].d2 == 66 && o[1].d2 == 63 && o[2].d2 == 63 && o[3].d2 == 1, "-62, then +127 split into steps of 63 at most into steps of 63 at most: %s", dump(o).c_str());
+        /* a relative EC4 encoder on a Q-Link: steps pass as they are */
+        set(e, "Slot", 5); press(e, "Learn"); t_in(e, DEV_EC4, 0xB0, 3, 65);
+        set(e, "Type", 5); set(e, "Number", 32); set(e, "Encoder", 1);
+        take(e);
+        t_in(e, DEV_EC4, 0xB0, 3, 66); t_in(e, DEV_EC4, 0xB0, 3, 62);
+        o = take(e);
+        CHECK(o.size() == 2 && o[0].port == P && o[0].d1 == 32 && o[0].d2 == 2 && o[1].d2 == 126, "REL 64 encoder -> Q-Link steps: %s", dump(o).c_str());
+
+        /* the script reports: Q-Link names show up in NUMBER and on the EC4 */
+        const uint8_t q3[] = {0xF0, 0x7D, 0x43, 0x4D, 0x45, 2, 'C', 'u', 't', 'o', 'f', 'f', 0, '4', '2', 0xF7};
+        t_mpc(e, q3, sizeof q3);
+        set(e, "Slot", 2);
+        CHECK(display(e, "Number") == "Q-LINK 3: Cutoff", "Q-Link named by the Force: %s", display(e, "Number").c_str());
+        CHECK(display(e, "Last") == "MPC SCRIPT CONNECTED", "connection shown: %s", display(e, "Last").c_str());
+        const uint8_t v1[] = {0xF0, 0x7D, 0x43, 0x4D, 0x42, 'M', 'i', 'x', 'e', 'r', 0xF7};
+        t_mpc(e, v1, sizeof v1);
+        CHECK(display(e, "Last") == "MPC VIEW: Mixer", "view change shown: %s", display(e, "Last").c_str());
+        const uint8_t junk[] = {0xF0, 0x7D, 0x43, 0x4D, 0x45, 99, 'x', 0xF7};
+        t_mpc(e, junk, sizeof junk);
+        const uint8_t shortm[] = {0xF0, 0x7D, 0xF7};
+        t_mpc(e, shortm, sizeof shortm);
+
+        /* VIEW 5 has no name yet: nothing goes out; named on the phone, a press asks for it */
+        set(e, "Slot", 3); press(e, "Learn"); t_in(e, DEV_LC, 0x90, 10, 127); t_in(e, DEV_LC, 0x80, 10, 0);
+        set(e, "Type", 5); set(e, "Number", 20);
+        CHECK(display(e, "Number") == "VIEW 5: (NO NAME)", "unnamed view: %s", display(e, "Number").c_str());
+        char vb[256];
+        t_in(e, DEV_LC, 0x90, 10, 127); t_in(e, DEV_LC, 0x80, 10, 0);
+        CHECK(t_views(e, vb, sizeof vb) == 0, "an unnamed view sends nothing");
+        std::string j = http_get("/mpcview?n=5&name=Mixer");
+        CHECK(j.find("\"ok\":true") != std::string::npos, "view named over HTTP: %s", j.c_str());
+        t_in(e, DEV_LC, 0x90, 10, 127); t_in(e, DEV_LC, 0x80, 10, 0);
+        CHECK(t_views(e, vb, sizeof vb) == 1 && std::string(vb) == "Mixer\n", "VIEW 5 -> 'Mixer': %s", vb);
+        CHECK(take(e).empty(), "a view is SysEx, no CC");
+        http_get("/mpcgo?n=1");
+        CHECK(t_views(e, vb, sizeof vb) == 1 && std::string(vb) == "Main Mode\n", "VIEW 1 = Main Mode from a fresh map: %s", vb);
+        CHECK(http_get("/mpcgo?n=17").find("n 1..16") != std::string::npos, "view 17 refused");
+        j = http_get("/state");
+        CHECK(j.find("\"mpc\":{\"on\":true,\"view\":\"Mixer\"") != std::string::npos && j.find("\"seen\":[\"Mixer\"]") != std::string::npos &&
+              j.find("[\"Cutoff\",\"42\"]") != std::string::npos && j.find("\"views\":[\"Main Mode\",\"Step Sequencer\",\"Track Mute\",\"Pad Mute\",\"Mixer\"") != std::string::npos,
+              "state JSON has the MPC block: %s", j.substr(j.find("\"mpc\"")).c_str());
+        CHECK(j.find("MPC Q-LINK 3: Cutoff") != std::string::npos, "phone view target text");
+
+        /* NOTE REPEAT held on a knob: a page change releases it */
+        set(e, "Slot", 4); press(e, "Learn"); t_in(e, DEV_LC, 0xB0, 22, 0);
+        set(e, "Type", 5); set(e, "Number", 9); set(e, "Page", 1);
+        take(e);
+        t_in(e, DEV_LC, 0xB0, 22, 100);
+        o = take(e);
+        CHECK(is(o, P, 0xBF, 9, 127), "NOTE REPEAT on: %s", dump(o).c_str());
+        set(e, "Active Page", 1);
+        o = take(e);
+        bool rel = false;
+        for (auto &x : o) if (x.port == P && x.d1 == 9 && x.d2 == 0) rel = true;
+        CHECK(rel, "page change releases NOTE REPEAT: %s", dump(o).c_str());
+        set(e, "Active Page", 0);
+
+        /* views and MPC slots survive the project chunk; old maps keep the default names */
+        void *ptr = nullptr;
+        const intptr_t len = e->dispatcher(e, 23, 0, 0, &ptr, 0);
+        std::string ch((const char *)ptr, (size_t)len);
+        CHECK(ch.find("v5=Mixer;") != std::string::npos && ch.find("v1=") == std::string::npos, "views in the chunk: %s", ch.c_str());
+        e->dispatcher(e, 1, 0, 0, nullptr, 0);
+        e = open_plugin(lib);
+        e->dispatcher(e, 24, 0, (intptr_t)ch.size(), (void *)ch.data(), 0);
+        set(e, "Slot", 3);
+        CHECK(display(e, "Type") == "MPC" && display(e, "Number") == "VIEW 5: Mixer", "restored: %s / %s", display(e, "Type").c_str(), display(e, "Number").c_str());
+        e->dispatcher(e, 1, 0, 0, nullptr, 0);
     }
 
     /* ---- stress: random parameters and MIDI ---- */

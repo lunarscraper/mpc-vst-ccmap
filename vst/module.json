@@ -7,7 +7,7 @@
     {"key": "page", "name": "Page", "options": ["ALL", "1", "2", "3", "4"]},
     {"key": "out", "name": "Out", "options": ["A", "B", "C", "D"]},
     {"key": "ch", "name": "Channel", "min": 1, "max": 16},
-    {"key": "type", "name": "Type", "options": ["OFF", "CC", "NOTE", "PROGRAM", "PAGE"]},
+    {"key": "type", "name": "Type", "options": ["OFF", "CC", "NOTE", "PROGRAM", "PAGE", "MPC"]},
     {"key": "num", "name": "Number", "min": 0, "max": 127},
     {"key": "lo", "name": "Min", "min": 0, "max": 127},
     {"key": "hi", "name": "Max", "min": 0, "max": 127},
