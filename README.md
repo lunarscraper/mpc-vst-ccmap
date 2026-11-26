@@ -6,7 +6,7 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.12.1, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.12.0, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
@@ -17,7 +17,6 @@ Control und UC-33 übernehmen per Pickup.
 0.8.0: **Baukasten** – eigene Seiten mit Fadern, Drehreglern, Tastern, Schaltern und XY-Pads auf dem Handy/iPad bauen, jede mit eigener CC, eigenem Kanal und Ausgang (eigene Kachel im Hub).
 0.9.0: Baukasten-Element **Picker** – zeigt einen Wert, antippen öffnet eine Rolle zum Drehen, optional mit Namen für die Werte.
 0.10.0: Baukasten-Element **Kanalzug** (Fader + Mute für den Mixer der Force per MIDI Learn), Knopf „Mixer-Seite anlegen“, Rückkanal-Port **CC Map Return**.
-0.12.1: LEARN lässt sich wieder beliebig oft neu anlernen – die Tipp-Erkennung der Tasten unter MPC OS 3.10 war nach dem ersten Anlernen blockiert.
 0.11.3: Handy-Ansicht zeigt die 16 EC4-Encoder als eigenes Raster (benennen, bedienen).
 0.11.2: Tasten (LEARN, CLEAR, LOAD, SAVE, SEND VALUES) reagieren unter MPC OS 3.10 auf jeden Tipp.
 0.11.1: Encoder-Zuordnung wie ab Werk beim EC4 (CC 0–15 = Encoder 1–16).

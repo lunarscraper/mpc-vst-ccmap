@@ -101,7 +101,7 @@ enum {
 enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5 };
 
-#define BUILD_ID "ccmap-0.12.1"
+#define BUILD_ID "ccmap-0.12.0"
 static FILE *g_log;
 static std::mutex g_log_lock;
 #define LOG(...) do { std::lock_guard<std::mutex> lg_(g_log_lock); if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
@@ -1381,20 +1381,14 @@ static void setParameter(AEffect *e, int32_t i, float n) {
     }
     if (is_trigger(key)) {
         /* A press: 0 -> 1 always; 1 -> 0 too, but only well after the last press. So a host that
-         * holds the button as a toggle (MPC OS 3.10: 1 on one tap, 0 on the next) fires on every
-         * tap, while the release of a normal tap and the echo of our own reset (both within 0.6 s)
-         * don't fire again.
-         *
-         * The quick 1 -> 0 echo must NOT be recorded: when the host echoes our reset-to-0
-         * (audioMasterAutomate, below) we keep down[] at 1, so the host's next genuine toggle-off
-         * (a 0 sent seconds later) still reads as a 1 -> 0 edge and fires. Recording the echo as a 0
-         * would make that real tap look like "no change" and swallow every second LEARN/CLEAR tap. */
+         * holds the button as a toggle (MPC OS 3.10: 1 on one tap, 0 on the next, our reset to 0
+         * ignored) fires on every tap, while the release of a normal tap and the echo of our own
+         * reset (both within 0.6 s) don't fire again. */
         const bool down = n > 0.5f;
         const bool was = w->down[i];
-        const double t = mono_now();
-        if (!down && was && t - w->trig_t[i] < 0.6) return;   /* echo / quick release: don't record */
         w->down[i] = down;
-        if (down == was) return;                              /* no edge */
+        const double t = mono_now();
+        if (down == was || (!down && t - w->trig_t[i] < 0.6)) return;
         w->trig_t[i] = t;
         if (key == LOAD) { slot_load(w); web_apply(w); }
         else if (key == SAVE) slot_save(w);
