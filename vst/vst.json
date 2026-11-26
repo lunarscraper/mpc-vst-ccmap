@@ -2,7 +2,7 @@
   "name": "CC Map",
   "vendor": "lunarscraper",
   "uid": "CcMp",
-  "version": 1200,
+  "version": 1201,
   "so": "ccmap.so",
   "effect": true,
   "module": "module.json",

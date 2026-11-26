@@ -6,7 +6,7 @@ Regler, Fader und jedes Pad per LEARN auf ein frei wählbares Ziel und sendet da
 MIDI-Ports. Der EC4 bekommt die Werte zurück (Anzeige stimmt, keine Sprünge), die Potis von Launch
 Control und UC-33 übernehmen per Pickup.
 
-**Status:** Version 0.12.0, offline getestet (x86, ASan/UBSan; das Lua-Skript gegen eine Attrappe der MPC-Schnittstelle). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
+**Status:** Version 0.12.1, offline getestet (x86, ASan/UBSan). 0.1.0 läuft auf der Force (Presets erscheinen in der Liste).
 0.2.0: Rückkanal zum EC4, Pickup, Relativ-Encoder, Tab SYNC.
 0.3.0: Launch-Control-Template an Farbe und Pad-Nummer erkennbar, Anzeige LC TEMPLATE.
 0.4.0: OXI E16 als eigenes Gerät mit Rückkanal (wie der EC4).
@@ -17,7 +17,7 @@ Control und UC-33 übernehmen per Pickup.
 0.8.0: **Baukasten** – eigene Seiten mit Fadern, Drehreglern, Tastern, Schaltern und XY-Pads auf dem Handy/iPad bauen, jede mit eigener CC, eigenem Kanal und Ausgang (eigene Kachel im Hub).
 0.9.0: Baukasten-Element **Picker** – zeigt einen Wert, antippen öffnet eine Rolle zum Drehen, optional mit Namen für die Werte.
 0.10.0: Baukasten-Element **Kanalzug** (Fader + Mute für den Mixer der Force per MIDI Learn), Knopf „Mixer-Seite anlegen“, Rückkanal-Port **CC Map Return**.
-0.12.0: **MPC-Link** – TYPE = MPC steuert die Force selbst (Transport, Spur, Ansichten, Q-Links) über ein Lua-Controller-Skript (MPC OS 3.10); Q-Link-Namen erscheinen auf dem EC4. Auf der Force noch nicht getestet.
+0.12.1: LEARN lässt sich wieder beliebig oft neu anlernen – die Tipp-Erkennung der Tasten unter MPC OS 3.10 war nach dem ersten Anlernen blockiert.
 0.11.3: Handy-Ansicht zeigt die 16 EC4-Encoder als eigenes Raster (benennen, bedienen).
 0.11.2: Tasten (LEARN, CLEAR, LOAD, SAVE, SEND VALUES) reagieren unter MPC OS 3.10 auf jeden Tipp.
 0.11.1: Encoder-Zuordnung wie ab Werk beim EC4 (CC 0–15 = Encoder 1–16).
@@ -41,8 +41,6 @@ Launch Control / UC-33 / anderer USB-Controller
         ├──► Ports „Out A" … „Out D"   → als MIDI-Eingang einer Spur oder als Ausgang einer MIDI-Spur wählen
         ├──► „Link A": Out A zusätzlich an alle „Control In"-Ports anderer Plugins
         │     (Euclidier FX, Acid FX, Maze FX …), ganz ohne Routing
-        ├──► Port „MPC" (TYPE = MPC): Befehle an die Force selbst, über das Skript ccmapForce.lua
-        │     (Play, Rec, Undo, Spur ±, Ansichten, Q-Links …); zurück kommen Ansicht, Spur, Q-Link-Namen
         ├──► LEDs der Launch Control (Pads zeigen ihren Slot, Pfeile die Seiten)
         └──► Rückkanal: gespeicherte Positionen zurück an den EC4
 ```
@@ -71,8 +69,8 @@ ein- und ausgehenden Nachrichten.
 | PAGE | Seite des Slots: ALL oder 1–4 |
 | OUT | Ausgangsport A–D |
 | CHANNEL | MIDI-Kanal des Ziels |
-| TYPE | OFF, CC, NOTE, PROGRAM, PAGE, MPC |
-| NUMBER | CC- oder Notennummer. Bei PAGE: 0 = nächste Seite, 1–4 = diese Seite. Bei MPC: der Befehl (Tabelle im Abschnitt MPC-Link) |
+| TYPE | OFF, CC, NOTE, PROGRAM, PAGE |
+| NUMBER | CC- oder Notennummer. Bei PAGE: 0 = nächste Seite, 1–4 = diese Seite |
 
 Ein frisch gelernter Slot gibt den Regler unverändert weiter (Out A, gleicher Kanal, gleiche Nummer).
 Danach einfach das Ziel umstellen.
@@ -322,103 +320,6 @@ mit demselben Kanal und derselben CC nach (ohne selbst etwas zu senden). Ob die 
 MIDI-Learn-Zielen dorthin zurückmeldet, hängt von der Force ab; ohne Rückmeldung zeigt das Handy weiter die
 eigene letzte Stellung. Der Kanalzug-Fader springt beim Antippen nicht, er wird von seiner Stellung aus gewischt.
 
-## MPC-Link (ab 0.12.0): die Force selbst steuern
-
-Seit MPC OS 3.10 lädt die Force **Controller-Skripte in Lua** (so binden Akai die eigenen Keyboards ein).
-Ein Skript hängt an einem MIDI-Port und darf Transport, Spuren, Modi und Q-Links bedienen und auslesen –
-ohne Root, ohne Addin, ohne Patch. Die Erkenntnisse stammen aus Ryan Gilmores Projekt *Move MPC Control*
-(Ableton Move als MPC-Controller, getestet auf MPC Live II mit 3.10.1).
-
-CC Map bringt dafür einen eigenen Port **„CC Map MPC"** und das Skript **ccmapForce** (Ordner `mpc-script/`)
-mit. Die Force bindet das Skript an diesen Port, sobald CC Map geladen ist. Jeder Slot mit **TYPE = MPC**
-schickt dann statt einer CC einen Befehl an die Force:
-
-| NUMBER | Befehl | Hinweis |
-|---|---|---|
-| 0 | PLAY START | Play vom Anfang / Stop |
-| 1 | PLAY / CONT | Play ab Position / Stop |
-| 2 | STOP CLIPS | alle Clips stoppen |
-| 3 / 4 | REC / OVERDUB | |
-| 5 / 6 | UNDO / REDO | |
-| 7 / 8 | TRACK − / TRACK + | vorige / nächste Spur |
-| 9 | NOTE REPEAT | solange gedrückt |
-| 10 | REC ARM | aktuelle Spur scharf / aus |
-| 11 | METRONOME | an / aus |
-| 12 / 13 | 16 LEVELS / FULL LEVEL | |
-| 14 | QUANTISE | wie die Taste der Force (wirkt nur mit Timing Correct) |
-| 15 | TAP TEMPO | ungetestet, ob die Force die Taste so nennt |
-| 16–31 | **VIEW 1–16** | eine Ansicht der Force, per Name (siehe unten) |
-| 32–47 | **Q-LINK 1–16** | dreht den Q-Link der Force – was er gerade steuert, folgt der Force (Q-Link-Modus, Spur, Plugin) |
-
-- **Tasten** reagieren auf Drücken (NOTE REPEAT auch auf Loslassen); TOGGLE hat bei MPC keine Bedeutung.
-- **Q-Links** sind endlos: CC Map schickt nur, *wie weit* der Regler gedreht wurde. Am EC4 dafür am besten
-  den Encoder auf relativ (CCR1/CCR2) stellen und im Slot ENCODER = REL 64 oder REL 2C wählen – dann gibt es
-  keinen Anschlag. MIN/MAX skalieren bei absoluten Reglern den Weg (z. B. MIN 0 / MAX 30 = feiner).
-- **Namen auf dem EC4:** Ein Q-Link-Slot ohne eigenen Namen zeigt, was der Q-Link gerade steuert
-  (z. B. `Ctff` für Cutoff) – die Force meldet das laufend. Tasten zeigen Kürzel (`Play`, `Undo`, `Trk+`).
-- **LAST** zeigt Wechsel der Ansicht (`MPC VIEW: …`) und `MPC SCRIPT CONNECTED` / `LOST`.
-
-### Ansichten (Matrix, Mixer, Track Edit …)
-
-Die Force kennt ihre Ansichten unter internen Namen. Belegt sind ab Werk **VIEW 1 = Main Mode**,
-**2 = Step Sequencer**, **3 = Track Mute**, **4 = Pad Mute** (auf der MPC Live II bestätigt). Die Namen für
-Matrix, Mixer, Track Edit usw. liest du so aus:
-
-1. Handy-Ansicht von CC Map öffnen, Tab **MPC**.
-2. Auf der Force die gewünschte Ansicht aufrufen. Ihr Name erscheint unter **Gesehene Ansichten**.
-3. Den Namen antippen → er landet auf dem nächsten freien Platz (V5, V6 …), „Speichern". Mit **Los** sofort
-   ausprobieren, ob die Force dorthin springt.
-4. Im Plugin einen Slot auf TYPE = MPC, NUMBER = VIEW 5 usw. stellen.
-
-Springt die Force mit einem Namen nicht dorthin, lässt sich stattdessen eine Taste der Force drücken:
-Name `btn:<Taste>`, z. B. `btn:mixer`. Welche Tasten es gibt, steht unten im Tab MPC unter
-„Tasten und Felder, die die Force meldet" (und im Log). Die Namen der Ansichten werden mit Projekt und Preset
-gespeichert.
-
-### Einrichtung (einmalig, am PC mit Python und per SSH)
-
-Die Force lädt ein Skript nur, wenn seine `.ini` eine Prüfsumme trägt: SHA-256 über die `.lua` plus ein
-**Salt von inMusic**. Das Salt steht nicht im Repo; `mpcsign.py` findet es im MPC-Programm deiner eigenen
-Force und prüft es gegen eines von Akais eigenen Skripten. Es bleibt in `mpc-script/salt.private`
-(git ignoriert die Datei) – **nicht committen, nicht weitergeben.**
-
-In PowerShell im Ordner `mpc-script` (Adresse der Force statt `192.168.178.40`):
-
-```
-scp -r . root@192.168.178.40:/tmp/ccmap-mpc
-ssh root@192.168.178.40 "sh /tmp/ccmap-mpc/force-tool.sh probe"
-```
-
-`probe` zeigt, ob die Force Akais Skripte hat (sonst gibt es auf diesem OS keine Skript-Schnittstelle), wo das
-MPC-Programm liegt und wohin Benutzer-Skripte gehören. Dann:
-
-```
-ssh root@192.168.178.40 "sh /tmp/ccmap-mpc/force-tool.sh salt"
-scp -r root@192.168.178.40:/tmp/ccmap-salt .
-python mpcsign.py findsalt ccmap-salt/MPC.bin ccmap-salt/akai.ini ccmap-salt/akai.lua
-python mpcsign.py sign
-scp -r . root@192.168.178.40:/tmp/ccmap-mpc
-ssh root@192.168.178.40 "sh /tmp/ccmap-mpc/force-tool.sh install; rm -rf /tmp/ccmap-salt /tmp/ccmap-mpc"
-```
-
-Danach die **Force neu starten** (Skripte werden nur beim Start gelesen), ein Projekt mit CC Map laden und
-die Handy-Ansicht, Tab MPC, öffnen: „Skript verbunden" und die aktuelle Ansicht sollten erscheinen.
-Den Ordner `ccmap-salt` auf dem PC danach löschen. Nach jeder Änderung der `.lua` erneut `sign` und `install`.
-Entfernen: `force-tool.sh remove`, dann neu starten.
-
-*Preferences → MIDI:* Bei **CC Map MPC** weder TRACK noch CONTROL einschalten – den Port bedient das Skript.
-
-### Wenn es nicht klappt
-
-- Steht im Tab MPC dauerhaft „Kein Skript gehört": `/tmp/ccmap_vst.log` ansehen. Die Zeile
-  `MPC link port … ('CC Map MPC')` nennt den Port. Zeigt die Force ihn in *Preferences → MIDI* unter anderem
-  Namen, mit `python mpcsign.py sign --port "<Name wie dort>"` neu signieren und installieren.
-- Ob die Force Skripte überhaupt an den Port eines Plugins bindet (statt nur an USB-Geräte), ist bisher
-  nicht erprobt. Wenn nicht, ist der Ausweg ein Skript direkt für den EC4 – dann bitte das Log schicken.
-- Zeilen `MPC script error: …` im Log nennen Funktionen, die es auf der Force nicht gibt (z. B. Q-Links 9–16
-  bei nur 8 Q-Links) – die übrigen Befehle laufen trotzdem.
-- Offline-Test des Skripts: `lua test/run.lua` im Ordner `mpc-script` (Lua 5.4).
-
 ## OXI E16
 
 - Wird am Namen („E16") erkannt; OXI One und OXI Coral zählen weiter als normale USB-Geräte.
@@ -444,14 +345,10 @@ Entfernen: `force-tool.sh remove`, dann neu starten.
 | `vst/module.json`, `vst/vst.json`, `vst/layout.conf` | Parameter und Skin für `gen_vst.py` |
 | `vst/captions.py`, `vst/fonts/` | Beschriftungen in Titillium Web (aus mpc-vst-euclidier, SIL OFL) |
 | `vst/host_test.cpp`, `vst/test.sh` | Offline-Test über Test-Hooks statt ALSA |
-| `mpc-script/ccmapForce/` | MPC-Link: das Controller-Skript für die Force (`.lua`) und seine `.ini` (erst nach `sign` gültig) |
-| `mpc-script/mpcsign.py` | Salt finden und prüfen, `.ini` signieren (PC, Python 3) |
-| `mpc-script/force-tool.sh` | auf der Force: probe, salt, install, remove |
-| `mpc-script/test/run.lua` | Offline-Test des Skripts gegen eine Attrappe der MPC-Schnittstelle |
 
 Build: Actions → „VST release (draft)" → Run workflow (Vorlage: mpc-vst-rattler, open-mpc/mpc-vst-plugins).
 
 ## Hinweis
 
 Entwickelt mit Unterstützung von Claude (Anthropic). „Novation", „Launch Control" und „Evolution UC-33"
-gehören ihren Inhabern, keine Verbindung. „MPC", „Force" und „Q-Link" sind Marken von inMusic/Akai Professional. Der MPC-Link nutzt die Skript-Schnittstelle von MPC OS so, wie Ryan Gilmores *Move MPC Control* (GPL-3.0) sie dokumentiert; `ccmapForce.lua` ist davon unabhängig neu geschrieben (MIT).
+gehören ihren Inhabern, keine Verbindung. „MPC", „Force" und „Q-Link" sind Marken von inMusic/Akai Professional.
