@@ -358,6 +358,20 @@ static std::string factory_drumgen() {
     pad(3, 5, 108, false, "Load Preset");
     return f.state();
 }
+static std::string factory_ec4_qlinks() {
+    /* Faderfox EC4, group 1 (channel 1, CC 0..15 = encoder 1..16, absolute) -> the Force's Q-Links 1..16
+     * through the MPC link; they turn whatever the current screen puts on its Q-Links. FOLLOW off, so
+     * turning them on CC Map's own screen (where Q-Link 1 is SLOT) can't pull the editor around. */
+    Mapper f;
+    f.s.follow = 0;
+    for (int i = 0; i < 16; i++) {
+        Map &m = f.map[i];
+        m.used = true; m.dev = DEV_EC4; m.sch = 0; m.stype = S_CC; m.snum = (uint8_t)i; m.page = 0;
+        m.type = D_MPC; m.num = (uint8_t)(mpc::QL0 + i); m.enc = ENC_ABS;
+        m.cell = (uint8_t)(i + 1); m.grp = 1;
+    }
+    return f.state();
+}
 struct Factory { const char *name; std::string state; };
 static std::vector<Factory> &factory() {
     static std::vector<Factory> F;
@@ -367,6 +381,7 @@ static std::vector<Factory> &factory() {
         F.push_back({"LC 4 PAGES > OUT A-D", factory_pages(true)});
         F.push_back({"EMPTY (LEARN)", "pg=0;"});
         F.push_back({"LC > DRUMGEN (CH 15)", factory_drumgen()});
+        F.push_back({"EC4 G1 > Q-LINK 1-16", factory_ec4_qlinks()});
     }
     return F;
 }

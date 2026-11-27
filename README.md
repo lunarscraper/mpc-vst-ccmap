@@ -138,6 +138,7 @@ Presets pro Plugin gehen genauso, dann aber immer nur eins zur Zeit.
 | 3 | **LC 4 PAGES > OUT A-D**: wie 2, aber Seite 1–4 = Out A–D, Kanal 1 (vier Synth-Spuren, je ein Port) |
 | 4 | **EMPTY (LEARN)**: leere Belegung |
 | 5 | **LC > DRUMGEN (CH 15)**: DrumGen oder DrumGen FX, LINK A an. **In DrumGen CONTROL CH auf 15 stellen** (ab Werk 16, den nutzt schon das Euclidier-Preset mit denselben CC-Nummern). Seite 1 PLAY: oben Density, unten Pattern der Lanes 1–8, Pads = Lane an/aus. Seite 2 LANES: oben Length, unten Note, Pads = Dice (neu würfeln). Seite 3 GLOBAL: oben Style, Random, Swing, Gate, Auto, Remix Type, Remix Every, Echo Time; unten Echo Repeats, Echo Prob, Echo Falloff, Glitch Repeats, Glitch Gate, Glitch Prob, Glitch Random, Preset; Pads = Generate, Variate, Remix an/aus, Echo an/aus, Glitch an/aus, Load Preset. Seite 4: Pads = Lock der Lanes 1–8, Regler frei zum Lernen |
+| 6 | **EC4 G1 > Q-LINK 1-16**: Faderfox EC4 Gruppe 1 (Kanal 1, CC 0–15, absolut), Encoder 1–16 → Q-Links 1–16 der Force über den MPC-Link (Skript ccmapForce.lua nötig). Bedient, was der aktuelle Bildschirm auf seinen Q-Links hat. FOLLOW aus. |
 
 ## Launch Control (MK1)
 
